@@ -13,16 +13,25 @@ The recorder uses `wpctl` to find the default microphone and current default sys
 - `wpctl`
 - `gnome-extensions`
 
+Install Rust/Cargo with `rustup`:
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup default stable
+```
+
+After installing `rustup`, restart the shell or run `source "$HOME/.cargo/env"` so `cargo` is on `PATH`.
+
 On Fedora-like systems:
 
 ```sh
-sudo dnf install cargo wireplumber ffmpeg gnome-extensions-app
+sudo dnf install wireplumber ffmpeg gnome-extensions-app
 ```
 
 On Debian/Ubuntu-like systems:
 
 ```sh
-sudo apt install cargo wireplumber ffmpeg gnome-shell-extension-prefs
+sudo apt install wireplumber ffmpeg gnome-shell-extension-prefs
 ```
 
 ## Install
