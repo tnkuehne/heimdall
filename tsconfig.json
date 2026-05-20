@@ -1,0 +1,14 @@
+{
+  "extends": "@tsconfig/strictest/tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "useDefineForClassFields": false,
+    "skipLibCheck": true,
+    "types": ["@girs/gnome-shell/ambient"],
+    "rootDir": "extension",
+    "outDir": "build/extension"
+  },
+  "include": ["extension/**/*.ts"]
+}

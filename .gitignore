@@ -1,0 +1,4 @@
+/backend/target/
+/node_modules/
+/build/
+/.pnpm-store/
