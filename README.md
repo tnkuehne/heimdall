@@ -2,7 +2,7 @@
 
 GNOME Shell extension plus Rust backend for recording meetings from the top bar.
 
-The recorder uses `wpctl` to find the default microphone and current default system output, captures them through `ffmpeg`'s Pulse-compatible PipeWire path, mixes them, and writes a mono MP3 file.
+The recorder uses `wpctl` to find the default microphone and current default system output, captures them through `ffmpeg`'s Pulse-compatible PipeWire path, and writes a stereo MP3 file with microphone audio on the left channel and system audio on the right channel.
 
 ## Requirements
 
