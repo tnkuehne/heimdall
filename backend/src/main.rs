@@ -70,6 +70,8 @@ enum ConfigCommand {
     SetProvider { provider: String },
     SetRecordingsDir { path: PathBuf },
     ResetRecordingsDir,
+    SetPostTranscribeHook { path: PathBuf },
+    ClearPostTranscribeHook,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -123,6 +125,12 @@ fn main() -> Result<()> {
                 print_json(&config::set_recordings_dir(&path)?)
             }
             ConfigCommand::ResetRecordingsDir => print_json(&config::reset_recordings_dir()?),
+            ConfigCommand::SetPostTranscribeHook { path } => {
+                print_json(&config::set_post_transcribe_hook(&path)?)
+            }
+            ConfigCommand::ClearPostTranscribeHook => {
+                print_json(&config::clear_post_transcribe_hook()?)
+            }
         },
         CommandKind::Auth { command } => match command {
             AuthCommand::Set { provider } => print_json(&auth::set_api_key(&provider)?),

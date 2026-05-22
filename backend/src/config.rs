@@ -2,6 +2,7 @@ use crate::auth;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 const CONFIG_DIR_NAME: &str = "meeting-recorder";
@@ -12,6 +13,7 @@ pub struct Config {
     pub transcription_provider: Option<String>,
     #[serde(default = "default_recordings_dir_unchecked")]
     pub recordings_dir: PathBuf,
+    pub post_transcribe_hook: Option<PathBuf>,
 }
 
 impl Default for Config {
@@ -19,6 +21,7 @@ impl Default for Config {
         Self {
             transcription_provider: None,
             recordings_dir: default_recordings_dir_unchecked(),
+            post_transcribe_hook: None,
         }
     }
 }
@@ -57,6 +60,33 @@ pub fn set_recordings_dir(path: &Path) -> Result<Config> {
 pub fn reset_recordings_dir() -> Result<Config> {
     let mut config = read_config()?;
     config.recordings_dir = default_recordings_dir()?;
+    write_config(&config)?;
+    Ok(config)
+}
+
+pub fn set_post_transcribe_hook(path: &Path) -> Result<Config> {
+    if !path.is_absolute() {
+        bail!("post-transcribe hook must be an absolute path");
+    }
+
+    let metadata =
+        std::fs::metadata(path).with_context(|| format!("failed to read {}", path.display()))?;
+    if !metadata.is_file() {
+        bail!("post-transcribe hook is not a file: {}", path.display());
+    }
+    if metadata.permissions().mode() & 0o111 == 0 {
+        bail!("post-transcribe hook is not executable: {}", path.display());
+    }
+
+    let mut config = read_config()?;
+    config.post_transcribe_hook = Some(path.to_path_buf());
+    write_config(&config)?;
+    Ok(config)
+}
+
+pub fn clear_post_transcribe_hook() -> Result<Config> {
+    let mut config = read_config()?;
+    config.post_transcribe_hook = None;
     write_config(&config)?;
     Ok(config)
 }

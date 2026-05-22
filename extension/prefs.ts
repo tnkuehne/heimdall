@@ -20,6 +20,7 @@ type TranscriptionProvider = typeof TRANSCRIPTION_PROVIDERS[number]['id'];
 type BackendConfig = {
     transcription_provider: TranscriptionProvider | null;
     recordings_dir: string;
+    post_transcribe_hook: string | null;
 };
 
 type AuthStatus = {
@@ -38,6 +39,8 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
     private _providerRow: Adw.ComboRow | null = null;
     private _recordingsDirRow: Adw.ActionRow | null = null;
     private _resetRecordingsDirButton: Gtk.Button | null = null;
+    private _postTranscribeHookRow: Adw.ActionRow | null = null;
+    private _clearPostTranscribeHookButton: Gtk.Button | null = null;
     private _loadingProvider = false;
 
     override fillPreferencesWindow(window: Adw.PreferencesWindow) {
@@ -96,6 +99,37 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
         });
         recordingGroup.add(providerRow);
         this._providerRow = providerRow;
+
+        const automationGroup = new Adw.PreferencesGroup({
+            title: 'Automation',
+        });
+        page.add(automationGroup);
+
+        const postTranscribeHookRow = new Adw.ActionRow({
+            title: 'Post-transcribe hook',
+            subtitle: 'No hook configured',
+            subtitle_selectable: true,
+            use_markup: false,
+        });
+        const choosePostTranscribeHookButton = new Gtk.Button({
+            label: 'Choose...',
+            valign: Gtk.Align.CENTER,
+        });
+        choosePostTranscribeHookButton.connect('clicked', () => this._choosePostTranscribeHook(window));
+
+        const clearPostTranscribeHookButton = new Gtk.Button({
+            label: 'Clear',
+            valign: Gtk.Align.CENTER,
+            visible: false,
+        });
+        clearPostTranscribeHookButton.connect('clicked', () => this._clearPostTranscribeHook(window));
+
+        postTranscribeHookRow.add_suffix(clearPostTranscribeHookButton);
+        postTranscribeHookRow.add_suffix(choosePostTranscribeHookButton);
+        postTranscribeHookRow.set_activatable_widget(choosePostTranscribeHookButton);
+        automationGroup.add(postTranscribeHookRow);
+        this._postTranscribeHookRow = postTranscribeHookRow;
+        this._clearPostTranscribeHookButton = clearPostTranscribeHookButton;
 
         const keysGroup = new Adw.PreferencesGroup({
             title: 'API Keys',
@@ -169,6 +203,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
     private _applyConfig(config: BackendConfig) {
         this._applyProvider(config.transcription_provider);
         this._applyRecordingsDir(config.recordings_dir);
+        this._applyPostTranscribeHook(config.post_transcribe_hook);
     }
 
     private _applyRecordingsDir(path: string) {
@@ -177,6 +212,14 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 
         this._recordingsDirRow.set_subtitle(path);
         this._resetRecordingsDirButton.set_visible(path !== defaultRecordingsDir());
+    }
+
+    private _applyPostTranscribeHook(path: string | null) {
+        if (!this._postTranscribeHookRow || !this._clearPostTranscribeHookButton)
+            return;
+
+        this._postTranscribeHookRow.set_subtitle(path ?? 'No hook configured');
+        this._clearPostTranscribeHookButton.set_visible(path !== null);
     }
 
     private _setTranscriptionProvider(
@@ -238,6 +281,58 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
             .then(config => {
                 this._applyConfig(config);
                 this._toast(window, 'Recordings folder reset');
+            })
+            .catch(error => this._showError(window, error));
+    }
+
+    private _choosePostTranscribeHook(window: Adw.PreferencesWindow) {
+        const dialog = Gtk.FileChooserNative.new(
+            'Choose Post-transcribe Hook',
+            window,
+            Gtk.FileChooserAction.OPEN,
+            'Choose',
+            'Cancel'
+        );
+        dialog.set_modal(true);
+
+        const currentHook = this._postTranscribeHookRow?.get_subtitle();
+        if (currentHook && currentHook !== 'No hook configured')
+            dialog.set_file(Gio.File.new_for_path(currentHook));
+
+        dialog.connect('response', (_source, response) => {
+            try {
+                if (response !== Gtk.ResponseType.ACCEPT)
+                    return;
+
+                const file = dialog.get_file();
+                const path = file?.get_path();
+                if (!path) {
+                    this._toast(window, 'Only local executable files are supported');
+                    return;
+                }
+
+                this._setPostTranscribeHook(path, window);
+            } finally {
+                dialog.destroy();
+            }
+        });
+        dialog.show();
+    }
+
+    private _setPostTranscribeHook(path: string, window: Adw.PreferencesWindow) {
+        this._runBackend<BackendConfig>(['config', 'set-post-transcribe-hook', path])
+            .then(config => {
+                this._applyConfig(config);
+                this._toast(window, 'Post-transcribe hook updated');
+            })
+            .catch(error => this._showError(window, error));
+    }
+
+    private _clearPostTranscribeHook(window: Adw.PreferencesWindow) {
+        this._runBackend<BackendConfig>(['config', 'clear-post-transcribe-hook'])
+            .then(config => {
+                this._applyConfig(config);
+                this._toast(window, 'Post-transcribe hook cleared');
             })
             .catch(error => this._showError(window, error));
     }

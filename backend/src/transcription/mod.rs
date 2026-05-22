@@ -2,7 +2,7 @@ mod deepgram;
 pub mod provider;
 mod xai;
 
-use crate::auth;
+use crate::{auth, config};
 use anyhow::{Context, Result};
 use deepgram::DeepgramProvider;
 use provider::{
@@ -11,6 +11,7 @@ use provider::{
 use serde_json::Value;
 use std::fmt::Write;
 use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use xai::XaiProvider;
 
 pub fn transcribe(
@@ -38,14 +39,25 @@ pub fn transcribe(
 
     let response = provider.transcribe(&request, &api_key)?;
     write_transcript(&transcript_file, &response)?;
+    let duration = transcript_duration(&response);
+    let channels = transcript_channels(&response);
+    let channel_count = channels.as_ref().and_then(transcript_channel_count);
+    let post_transcribe_hook_error = spawn_post_transcribe_hook(
+        provider.id(),
+        &audio_file,
+        &transcript_file,
+        duration,
+        channel_count,
+    );
 
     Ok(TranscriptionSummary {
         provider: provider.id(),
         audio_file,
         transcript_file,
         text: transcript_text(&response),
-        duration: transcript_duration(&response),
-        channels: transcript_channels(&response),
+        duration,
+        channels,
+        post_transcribe_hook_error,
     })
 }
 
@@ -67,6 +79,48 @@ fn write_transcript(path: &PathBuf, response: &Value) -> Result<()> {
     std::fs::write(path, render_markdown(response))
         .with_context(|| format!("failed to write {}", path.display()))?;
     Ok(())
+}
+
+fn spawn_post_transcribe_hook(
+    provider: &str,
+    audio_file: &PathBuf,
+    transcript_file: &PathBuf,
+    duration: Option<f64>,
+    channel_count: Option<usize>,
+) -> Option<String> {
+    let config = match config::get() {
+        Ok(config) => config,
+        Err(error) => return Some(error.to_string()),
+    };
+    let Some(hook) = config.post_transcribe_hook else {
+        return None;
+    };
+
+    let mut command = Command::new(&hook);
+    command
+        .env("MEETING_RECORDER_EVENT", "post_transcribe")
+        .env("MEETING_RECORDER_PROVIDER", provider)
+        .env("MEETING_RECORDER_AUDIO_FILE", audio_file)
+        .env("MEETING_RECORDER_TRANSCRIPT_FILE", transcript_file)
+        .env("MEETING_RECORDER_RECORDINGS_DIR", &config.recordings_dir)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    if let Some(duration) = duration {
+        command.env(
+            "MEETING_RECORDER_DURATION_SECONDS",
+            format!("{duration:.3}"),
+        );
+    }
+    if let Some(channel_count) = channel_count {
+        command.env("MEETING_RECORDER_CHANNELS", channel_count.to_string());
+    }
+
+    command
+        .spawn()
+        .map(|_| None)
+        .unwrap_or_else(|error| Some(format!("failed to spawn {}: {error}", hook.display())))
 }
 
 fn render_markdown(response: &Value) -> String {
@@ -153,6 +207,13 @@ fn transcript_channels(response: &Value) -> Option<Value> {
         .get("channels")
         .cloned()
         .or_else(|| response.pointer("/results/channels").cloned())
+}
+
+fn transcript_channel_count(channels: &Value) -> Option<usize> {
+    channels
+        .as_array()
+        .map(Vec::len)
+        .or_else(|| channels.as_u64().map(|count| count as usize))
 }
 
 fn is_empty_transcription(response: &Value) -> bool {

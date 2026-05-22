@@ -83,6 +83,8 @@ meeting-recorder open-folder
 meeting-recorder config get
 meeting-recorder config set-recordings-dir /absolute/path
 meeting-recorder config reset-recordings-dir
+meeting-recorder config set-post-transcribe-hook /absolute/path/to/executable
+meeting-recorder config clear-post-transcribe-hook
 ```
 
 State and logs are written under:
@@ -112,7 +114,7 @@ meeting-recorder auth status deepgram
 
 For non-interactive callers, `auth set-stdin <provider>` reads the key from stdin.
 
-The provider selection and recordings folder are stored in:
+The provider selection, recordings folder, and optional post-transcribe hook are stored in:
 
 ```text
 ~/.config/meeting-recorder/config.json
@@ -132,6 +134,28 @@ example.transcript.md
 ```
 
 Use `--output <path>` to choose a different transcript path. Use `--language <code> --format` when requesting formatted xAI output, because xAI requires a language when formatting is enabled. For Deepgram, the backend uses Nova 3 with smart formatting, punctuation, utterances, diarization, and multichannel transcription enabled.
+
+## Post-transcribe Hook
+
+Meeting Recorder can spawn one executable after a transcript has been written. The hook is fire-and-forget: the recorder does not wait for it, does not capture output, and does not manage retries or logging.
+
+Configure it from `Preferences` or with:
+
+```sh
+meeting-recorder config set-post-transcribe-hook /home/timo/.config/meeting-recorder/post-transcribe
+```
+
+The hook receives context through environment variables:
+
+```text
+MEETING_RECORDER_EVENT=post_transcribe
+MEETING_RECORDER_PROVIDER=deepgram
+MEETING_RECORDER_AUDIO_FILE=/path/to/audio.mp3
+MEETING_RECORDER_TRANSCRIPT_FILE=/path/to/audio.transcript.md
+MEETING_RECORDER_RECORDINGS_DIR=/path/to/recordings
+MEETING_RECORDER_DURATION_SECONDS=123.456
+MEETING_RECORDER_CHANNELS=2
+```
 
 ## Development
 

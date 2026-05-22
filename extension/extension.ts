@@ -36,6 +36,7 @@ type TranscriptionSummary = {
     transcript_file: string;
     text: string | null;
     duration: number | null;
+    post_transcribe_hook_error: string | null;
 };
 
 class MeetingRecorderExtension extends Extension {
@@ -258,6 +259,8 @@ class MeetingRecorderIndicator {
         this._runBackend<TranscriptionSummary>(['transcribe', file, '--provider', provider])
             .then(summary => {
                 this._notifyTranscriptSaved(summary.transcript_file);
+                if (summary.post_transcribe_hook_error)
+                    this._notifyError(new Error(summary.post_transcribe_hook_error));
             })
             .catch(error => this._notifyError(error));
     }

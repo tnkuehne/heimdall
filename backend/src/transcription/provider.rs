@@ -20,6 +20,7 @@ pub struct TranscriptionSummary {
     pub text: Option<String>,
     pub duration: Option<f64>,
     pub channels: Option<Value>,
+    pub post_transcribe_hook_error: Option<String>,
 }
 
 pub trait TranscriptionProvider {
