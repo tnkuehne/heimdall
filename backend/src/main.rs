@@ -1,6 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
 mod auth;
+mod config;
 mod transcription;
 
 use clap::{ArgAction, Parser, Subcommand};
@@ -32,6 +33,10 @@ enum CommandKind {
     Stop,
     Status,
     OpenFolder,
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
@@ -54,8 +59,15 @@ enum CommandKind {
 #[derive(Subcommand)]
 enum AuthCommand {
     Set { provider: String },
+    SetStdin { provider: String },
     Status { provider: String },
     Delete { provider: String },
+}
+
+#[derive(Subcommand)]
+enum ConfigCommand {
+    Get,
+    SetProvider { provider: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -100,8 +112,17 @@ fn main() -> Result<()> {
                 .context("failed to open recordings folder with xdg-open")?;
             print_json(&serde_json::json!({ "opened": true, "folder": folder }))
         }
+        CommandKind::Config { command } => match command {
+            ConfigCommand::Get => print_json(&config::get()?),
+            ConfigCommand::SetProvider { provider } => {
+                print_json(&config::set_transcription_provider(&provider)?)
+            }
+        },
         CommandKind::Auth { command } => match command {
             AuthCommand::Set { provider } => print_json(&auth::set_api_key(&provider)?),
+            AuthCommand::SetStdin { provider } => {
+                print_json(&auth::set_api_key_from_stdin(&provider)?)
+            }
             AuthCommand::Status { provider } => print_json(&auth::status(&provider)?),
             AuthCommand::Delete { provider } => print_json(&auth::delete_api_key(&provider)?),
         },

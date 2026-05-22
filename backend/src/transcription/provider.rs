@@ -27,12 +27,12 @@ pub trait TranscriptionProvider {
     fn transcribe(&self, request: &TranscriptionRequest, api_key: &SecretString) -> Result<Value>;
 }
 
-pub fn default_transcript_path(audio_file: &Path, provider: &str) -> PathBuf {
+pub fn default_transcript_path(audio_file: &Path) -> PathBuf {
     let parent = audio_file.parent().unwrap_or_else(|| Path::new("."));
     let stem = audio_file
         .file_stem()
         .and_then(|value| value.to_str())
         .unwrap_or("transcript");
 
-    parent.join(format!("{stem}.{provider}.transcript.md"))
+    parent.join(format!("{stem}.transcript.md"))
 }

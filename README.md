@@ -52,6 +52,7 @@ On the first install, GNOME Shell may not discover the newly copied extension un
 
 - Click the top bar icon to start or stop recording.
 - Use the dropdown menu to start/stop recording or open the recordings folder.
+- Use the `Transcription` submenu to choose `Disabled`, `xAI`, or `Deepgram`.
 - Recordings are saved to:
 
 ```text
@@ -59,6 +60,9 @@ On the first install, GNOME Shell may not discover the newly copied extension un
 ```
 
 Active recordings use a `.part.mp3` filename and are renamed to `.mp3` after a clean stop.
+Transcription is disabled until a provider is selected. When `xAI` or `Deepgram` is selected,
+stopping a recording automatically transcribes the saved audio and writes a Markdown transcript
+next to the audio file.
 
 ## Backend
 
@@ -87,26 +91,44 @@ State and logs are written under:
 
 API keys are stored in GNOME Keyring through the Secret Service API. They are not written to the recorder state or config files.
 
-Configure xAI:
+Configure a provider from the extension menu:
+
+- Open `Transcription`.
+- Select `Set xAI API Key...` or `Set Deepgram API Key...`.
+- Paste the provider API key into the password prompt.
+- Select `xAI` or `Deepgram` in the same menu to enable automatic transcription.
+
+The CLI can also configure keys:
 
 ```sh
 meeting-recorder auth set xai
 meeting-recorder auth status xai
+meeting-recorder auth set deepgram
+meeting-recorder auth status deepgram
+```
+
+For non-interactive callers, `auth set-stdin <provider>` reads the key from stdin.
+
+Select the provider from the extension menu. The selection is stored in:
+
+```text
+~/.config/meeting-recorder/config.json
 ```
 
 Transcribe a recording:
 
 ```sh
 meeting-recorder transcribe ~/Recordings/Meetings/example.mp3 --provider xai
+meeting-recorder transcribe ~/Recordings/Meetings/example.mp3 --provider deepgram
 ```
 
-By default, xAI transcription is requested with multichannel mode enabled, matching the recorder's stereo layout. The transcript Markdown document is written next to the recording as:
+By default, transcription is requested with multichannel mode enabled, matching the recorder's stereo layout. The transcript Markdown document is written next to the recording as:
 
 ```text
-example.xai.transcript.md
+example.transcript.md
 ```
 
-Use `--output <path>` to choose a different transcript path. Use `--language <code> --format` when requesting formatted xAI output, because xAI requires a language when formatting is enabled.
+Use `--output <path>` to choose a different transcript path. Use `--language <code> --format` when requesting formatted xAI output, because xAI requires a language when formatting is enabled. For Deepgram, the backend uses Nova 3 with smart formatting, punctuation, utterances, diarization, and multichannel transcription enabled.
 
 ## Development
 

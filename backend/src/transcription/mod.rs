@@ -1,8 +1,10 @@
+mod deepgram;
 pub mod provider;
 mod xai;
 
 use crate::auth;
 use anyhow::{Context, Result};
+use deepgram::DeepgramProvider;
 use provider::{
     default_transcript_path, TranscriptionProvider, TranscriptionRequest, TranscriptionSummary,
 };
@@ -25,8 +27,7 @@ pub fn transcribe(
     let audio_file = audio_file
         .canonicalize()
         .with_context(|| format!("failed to resolve audio file {}", audio_file.display()))?;
-    let transcript_file =
-        output.unwrap_or_else(|| default_transcript_path(&audio_file, provider.id()));
+    let transcript_file = output.unwrap_or_else(|| default_transcript_path(&audio_file));
     let api_key = auth::get_api_key(provider.id())?;
     let request = TranscriptionRequest {
         audio_file: audio_file.clone(),
@@ -42,18 +43,16 @@ pub fn transcribe(
         provider: provider.id(),
         audio_file,
         transcript_file,
-        text: response
-            .get("text")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
-        duration: response.get("duration").and_then(Value::as_f64),
-        channels: response.get("channels").cloned(),
+        text: transcript_text(&response),
+        duration: transcript_duration(&response),
+        channels: transcript_channels(&response),
     })
 }
 
 fn provider_for(provider: &str) -> Box<dyn TranscriptionProvider> {
     match provider {
         "xai" => Box::new(XaiProvider),
+        "deepgram" => Box::new(DeepgramProvider),
         _ => unreachable!("provider should have been normalized before dispatch"),
     }
 }
@@ -77,6 +76,10 @@ fn render_markdown(response: &Value) -> String {
     if let Some(text) = response.get("text").and_then(Value::as_str) {
         markdown.push_str(text.trim());
         markdown.push('\n');
+    } else if let Some(turns) = deepgram_utterance_turns(response) {
+        for turn in turns {
+            let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
+        }
     } else if let Some(turns) = transcript_turns(response) {
         for turn in turns {
             let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
@@ -94,7 +97,7 @@ fn render_markdown(response: &Value) -> String {
 
 #[derive(Debug)]
 struct Word {
-    speaker: &'static str,
+    speaker: String,
     start: f64,
     end: f64,
     text: String,
@@ -102,8 +105,94 @@ struct Word {
 
 #[derive(Debug)]
 struct Turn {
-    speaker: &'static str,
+    speaker: String,
     text: String,
+}
+
+fn transcript_text(response: &Value) -> Option<String> {
+    response
+        .get("text")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            response
+                .pointer("/results/channels/0/alternatives/0/transcript")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+}
+
+fn transcript_duration(response: &Value) -> Option<f64> {
+    response
+        .get("duration")
+        .and_then(Value::as_f64)
+        .or_else(|| {
+            response
+                .pointer("/metadata/duration")
+                .and_then(Value::as_f64)
+        })
+}
+
+fn transcript_channels(response: &Value) -> Option<Value> {
+    response
+        .get("channels")
+        .cloned()
+        .or_else(|| response.pointer("/results/channels").cloned())
+}
+
+fn deepgram_utterance_turns(response: &Value) -> Option<Vec<Turn>> {
+    let utterances = response.pointer("/results/utterances")?.as_array()?;
+    let mut turns = Vec::new();
+
+    for utterance in utterances {
+        let text = utterance
+            .get("transcript")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+
+        if text.is_empty() {
+            continue;
+        }
+
+        turns.push(Turn {
+            speaker: deepgram_speaker(utterance),
+            text: text.to_string(),
+        });
+    }
+
+    if turns.is_empty() {
+        None
+    } else {
+        Some(turns)
+    }
+}
+
+fn deepgram_speaker(utterance: &Value) -> String {
+    let channel = utterance
+        .get("channel")
+        .and_then(Value::as_u64)
+        .or_else(|| {
+            utterance
+                .get("channel")
+                .and_then(Value::as_array)
+                .and_then(|channel| channel.first())
+                .and_then(Value::as_u64)
+        });
+
+    match channel {
+        Some(0) => "Me".to_string(),
+        Some(_) => utterance
+            .get("speaker")
+            .and_then(Value::as_u64)
+            .map(|speaker| format!("Speaker {}", speaker + 1))
+            .unwrap_or_else(|| "Meeting".to_string()),
+        None => utterance
+            .get("speaker")
+            .and_then(Value::as_u64)
+            .map(|speaker| format!("Speaker {}", speaker + 1))
+            .unwrap_or_else(|| "Speaker".to_string()),
+    }
 }
 
 fn transcript_turns(response: &Value) -> Option<Vec<Turn>> {
@@ -121,7 +210,7 @@ fn transcript_turns(response: &Value) -> Option<Vec<Turn>> {
     });
 
     let mut turns: Vec<Turn> = Vec::new();
-    let mut current_speaker = words[0].speaker;
+    let mut current_speaker = words[0].speaker.clone();
     let mut current_end = words[0].end;
     let mut current_text = String::new();
 
@@ -130,7 +219,7 @@ fn transcript_turns(response: &Value) -> Option<Vec<Turn>> {
 
         if !same_turn && !current_text.is_empty() {
             turns.push(Turn {
-                speaker: current_speaker,
+                speaker: current_speaker.clone(),
                 text: current_text.trim().to_string(),
             });
             current_text.clear();
@@ -171,7 +260,7 @@ fn channel_words(channels: &Value) -> Vec<Word> {
                 .flatten()
                 .filter_map(move |word| {
                     Some(Word {
-                        speaker,
+                        speaker: speaker.clone(),
                         start: word.get("start")?.as_f64()?,
                         end: word.get("end").and_then(Value::as_f64).unwrap_or_else(|| {
                             word.get("start").and_then(Value::as_f64).unwrap_or(0.0)
@@ -183,7 +272,7 @@ fn channel_words(channels: &Value) -> Vec<Word> {
         .collect()
 }
 
-fn channel_speaker(channel: &Value, fallback_index: usize) -> &'static str {
+fn channel_speaker(channel: &Value, fallback_index: usize) -> String {
     let index = channel
         .get("index")
         .or_else(|| channel.get("channel_index"))
@@ -191,9 +280,9 @@ fn channel_speaker(channel: &Value, fallback_index: usize) -> &'static str {
         .unwrap_or(fallback_index as u64);
 
     match index {
-        0 => "Me",
-        1 => "Meeting",
-        _ => "Unknown",
+        0 => "Me".to_string(),
+        1 => "Meeting".to_string(),
+        _ => "Unknown".to_string(),
     }
 }
 

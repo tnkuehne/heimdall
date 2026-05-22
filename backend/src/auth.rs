@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use keyring_core::{set_default_store, Entry, Error as KeyringError};
 use secrecy::SecretString;
 use serde::Serialize;
+use std::io::Read;
 use zbus_secret_service_keyring_store::Store;
 
 const SERVICE_NAME: &str = "meeting-recorder";
@@ -16,6 +17,19 @@ pub fn set_api_key(provider: &str) -> Result<AuthStatus> {
     let provider = normalize_provider(provider)?;
     let api_key = rpassword::prompt_password(format!("{provider} API key: "))
         .context("failed to read API key from terminal")?;
+    set_api_key_value(provider, &api_key)
+}
+
+pub fn set_api_key_from_stdin(provider: &str) -> Result<AuthStatus> {
+    let provider = normalize_provider(provider)?;
+    let mut api_key = String::new();
+    std::io::stdin()
+        .read_to_string(&mut api_key)
+        .context("failed to read API key from stdin")?;
+    set_api_key_value(provider, &api_key)
+}
+
+fn set_api_key_value(provider: &'static str, api_key: &str) -> Result<AuthStatus> {
     let api_key = api_key.trim().to_string();
 
     if api_key.is_empty() {
@@ -66,6 +80,7 @@ pub fn get_api_key(provider: &str) -> Result<SecretString> {
 pub fn normalize_provider(provider: &str) -> Result<&'static str> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "xai" | "grok" => Ok("xai"),
+        "deepgram" => Ok("deepgram"),
         other => bail!("unsupported transcription provider: {other}"),
     }
 }
