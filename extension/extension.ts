@@ -257,10 +257,7 @@ class MeetingRecorderIndicator {
         Main.notify('Meeting Recorder', `Transcribing with ${providerLabel(provider)}`);
         this._runBackend<TranscriptionSummary>(['transcribe', file, '--provider', provider])
             .then(summary => {
-                Main.notify(
-                    'Meeting Recorder',
-                    `Transcript saved: ${GLib.path_get_basename(summary.transcript_file)}`
-                );
+                this._notifyTranscriptSaved(summary.transcript_file);
             })
             .catch(error => this._notifyError(error));
     }
@@ -272,6 +269,20 @@ class MeetingRecorderIndicator {
             title: 'Meeting Recorder',
             body: `Recording saved: ${GLib.path_get_basename(file)}`,
             iconName: 'audio-x-generic-symbolic',
+        });
+
+        notification.connect('activated', () => this._openFileLocation(file));
+        notification.addAction('Open Location', () => this._openFileLocation(file));
+        source.addNotification(notification);
+    }
+
+    private _notifyTranscriptSaved(file: string) {
+        const source = this._getNotificationSource();
+        const notification = new MessageTray.Notification({
+            source,
+            title: 'Meeting Recorder',
+            body: `Transcript saved: ${GLib.path_get_basename(file)}`,
+            iconName: 'text-x-generic-symbolic',
         });
 
         notification.connect('activated', () => this._openFileLocation(file));
