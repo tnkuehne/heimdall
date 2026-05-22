@@ -23,7 +23,7 @@ impl TranscriptionProvider for DeepgramProvider {
             ("smart_format", "true".to_string()),
             ("punctuate", "true".to_string()),
             ("utterances", "true".to_string()),
-            ("diarize", "true".to_string()),
+            ("diarize_model", "latest".to_string()),
             ("multichannel", request.multichannel.to_string()),
         ];
 
