@@ -1,19 +1,21 @@
 import St from 'gi://St';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
-import Clutter from 'gi://Clutter';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import * as Dialog from 'resource:///org/gnome/shell/ui/dialog.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import * as MessageTray from 'resource:///org/gnome/shell/ui/messageTray.js';
-import * as ModalDialog from 'resource:///org/gnome/shell/ui/modalDialog.js';
 import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const STATUS_INTERVAL_SECONDS = 2;
 
-type TranscriptionProvider = 'xai' | 'deepgram';
+const TRANSCRIPTION_PROVIDERS = [
+    {id: 'xai', label: 'xAI'},
+    {id: 'deepgram', label: 'Deepgram'},
+] as const;
+
+type TranscriptionProvider = typeof TRANSCRIPTION_PROVIDERS[number]['id'];
 
 type BackendStatus = {
     recording: boolean;
@@ -34,11 +36,6 @@ type TranscriptionSummary = {
     transcript_file: string;
     text: string | null;
     duration: number | null;
-};
-
-type AuthStatus = {
-    provider: TranscriptionProvider;
-    configured: boolean;
 };
 
 class MeetingRecorderExtension extends Extension {
@@ -82,14 +79,10 @@ class MeetingRecorderIndicator {
     private readonly _toggleItem: PopupMenu.PopupMenuItem;
     private readonly _statusItem: PopupMenu.PopupMenuItem;
     private readonly _openFolderItem: PopupMenu.PopupMenuItem;
+    private readonly _preferencesItem: PopupMenu.PopupMenuItem;
     private readonly _providerSubmenu: PopupMenu.PopupSubMenuMenuItem;
     private readonly _providerDisabledItem: PopupMenu.PopupMenuItem;
-    private readonly _providerXaiItem: PopupMenu.PopupMenuItem;
-    private readonly _providerDeepgramItem: PopupMenu.PopupMenuItem;
-    private readonly _setXaiKeyItem: PopupMenu.PopupMenuItem;
-    private readonly _setDeepgramKeyItem: PopupMenu.PopupMenuItem;
-    private readonly _deleteXaiKeyItem: PopupMenu.PopupMenuItem;
-    private readonly _deleteDeepgramKeyItem: PopupMenu.PopupMenuItem;
+    private readonly _providerItems = new Map<TranscriptionProvider, PopupMenu.PopupMenuItem>();
     private _notificationSource: MessageTray.Source | null = null;
     private _recording = false;
     private _lastFile: string | null = null;
@@ -125,22 +118,18 @@ class MeetingRecorderIndicator {
 
         this._providerSubmenu = new PopupMenu.PopupSubMenuMenuItem('Transcription: Disabled');
         this._providerDisabledItem = this._providerItem('Disabled', null);
-        this._providerXaiItem = this._providerItem('xAI', 'xai');
-        this._providerDeepgramItem = this._providerItem('Deepgram', 'deepgram');
         this._providerSubmenu.menu.addMenuItem(this._providerDisabledItem);
-        this._providerSubmenu.menu.addMenuItem(this._providerXaiItem);
-        this._providerSubmenu.menu.addMenuItem(this._providerDeepgramItem);
-        this._providerSubmenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._setXaiKeyItem = this._setApiKeyItem('Set xAI API Key...', 'xai');
-        this._setDeepgramKeyItem = this._setApiKeyItem('Set Deepgram API Key...', 'deepgram');
-        this._deleteXaiKeyItem = this._deleteApiKeyItem('Delete xAI API Key', 'xai');
-        this._deleteDeepgramKeyItem = this._deleteApiKeyItem('Delete Deepgram API Key', 'deepgram');
-        this._providerSubmenu.menu.addMenuItem(this._setXaiKeyItem);
-        this._providerSubmenu.menu.addMenuItem(this._setDeepgramKeyItem);
-        this._providerSubmenu.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-        this._providerSubmenu.menu.addMenuItem(this._deleteXaiKeyItem);
-        this._providerSubmenu.menu.addMenuItem(this._deleteDeepgramKeyItem);
+        for (const provider of TRANSCRIPTION_PROVIDERS) {
+            const item = this._providerItem(provider.label, provider.id);
+            this._providerItems.set(provider.id, item);
+            this._providerSubmenu.menu.addMenuItem(item);
+        }
+
         this._menu.addMenuItem(this._providerSubmenu);
+
+        this._preferencesItem = new PopupMenu.PopupMenuItem('Preferences');
+        this._preferencesItem.connect('activate', () => this._extension.openPreferences());
+        this._menu.addMenuItem(this._preferencesItem);
 
         this._loadConfig().catch(error => this._notifyError(error));
     }
@@ -203,17 +192,14 @@ class MeetingRecorderIndicator {
         this._toggleItem.label.text = toggleText;
     }
 
-    private async _runBackend<T>(args: string[], stdin: string | null = null): Promise<T> {
+    private async _runBackend<T>(args: string[]): Promise<T> {
         const argv = [this._extension.backendPath, ...args];
-        const flags = stdin === null
-            ? Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
-            : Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE;
         const proc = Gio.Subprocess.new(
             argv,
-            flags
+            Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
         );
 
-        const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc, stdin);
+        const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc);
         const stdout = stdoutBytes ?? '';
         const stderr = stderrBytes ?? '';
 
@@ -244,20 +230,6 @@ class MeetingRecorderIndicator {
         return item;
     }
 
-    private _setApiKeyItem(label: string, provider: TranscriptionProvider) {
-        const item = new PopupMenu.PopupMenuItem(label);
-        item.connect('activate', () => this._showApiKeyDialog(provider));
-        return item;
-    }
-
-    private _deleteApiKeyItem(label: string, provider: TranscriptionProvider) {
-        const item = new PopupMenu.PopupMenuItem(label);
-        item.connect('activate', () => {
-            this._deleteProviderApiKey(provider).catch(error => this._notifyError(error));
-        });
-        return item;
-    }
-
     private async _loadConfig() {
         const config = await this._runBackend<BackendConfig>(['config', 'get']);
         this._applyTranscriptionProvider(config.transcription_provider);
@@ -273,8 +245,8 @@ class MeetingRecorderIndicator {
         this._transcriptionProvider = provider;
         this._providerSubmenu.label.text = `Transcription: ${providerLabel(provider)}`;
         this._providerDisabledItem.setOrnament(provider === null ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
-        this._providerXaiItem.setOrnament(provider === 'xai' ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
-        this._providerDeepgramItem.setOrnament(provider === 'deepgram' ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
+        for (const [providerId, item] of this._providerItems)
+            item.setOrnament(provider === providerId ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE);
     }
 
     private _autoTranscribe(file: string) {
@@ -291,62 +263,6 @@ class MeetingRecorderIndicator {
                 );
             })
             .catch(error => this._notifyError(error));
-    }
-
-    private _showApiKeyDialog(provider: TranscriptionProvider) {
-        const dialog = new ModalDialog.ModalDialog({destroyOnClose: true});
-        const providerName = providerLabel(provider);
-        const content = new Dialog.MessageDialogContent({
-            title: `${providerName} API Key`,
-            description: 'The key is stored in GNOME Keyring.',
-        });
-        const entry = new St.PasswordEntry({
-            hint_text: `${providerName} API key`,
-            show_peek_icon: true,
-            x_expand: true,
-        });
-
-        dialog.contentLayout.add_child(content);
-        dialog.contentLayout.add_child(entry);
-        dialog.setInitialKeyFocus(entry);
-        dialog.setButtons([
-            {
-                label: 'Cancel',
-                action: () => {
-                    entry.set_text('');
-                    dialog.close();
-                },
-                key: Clutter.KEY_Escape,
-            },
-            {
-                label: 'Save',
-                action: () => {
-                    const apiKey = entry.get_text().trim();
-                    entry.set_text('');
-                    dialog.close();
-
-                    if (apiKey.length === 0) {
-                        Main.notifyError('Meeting Recorder', 'API key cannot be empty');
-                        return;
-                    }
-
-                    this._storeProviderApiKey(provider, apiKey).catch(error => this._notifyError(error));
-                },
-                key: Clutter.KEY_Return,
-                default: true,
-            },
-        ]);
-        dialog.open();
-    }
-
-    private async _storeProviderApiKey(provider: TranscriptionProvider, apiKey: string) {
-        await this._runBackend<AuthStatus>(['auth', 'set-stdin', provider], apiKey);
-        Main.notify('Meeting Recorder', `${providerLabel(provider)} API key saved`);
-    }
-
-    private async _deleteProviderApiKey(provider: TranscriptionProvider) {
-        await this._runBackend<AuthStatus>(['auth', 'delete', provider]);
-        Main.notify('Meeting Recorder', `${providerLabel(provider)} API key deleted`);
     }
 
     private _notifyRecordingSaved(file: string) {
@@ -400,9 +316,9 @@ class MeetingRecorderIndicator {
     }
 }
 
-function communicateUtf8(proc: Gio.Subprocess, stdin: string | null): Promise<[boolean, string, string]> {
+function communicateUtf8(proc: Gio.Subprocess): Promise<[boolean, string, string]> {
     return new Promise((resolve, reject) => {
-        proc.communicate_utf8_async(stdin, null, (_source, result) => {
+        proc.communicate_utf8_async(null, null, (_source, result) => {
             try {
                 resolve(proc.communicate_utf8_finish(result));
             } catch (error) {
@@ -422,14 +338,10 @@ function logUnknownError(error: unknown, context: string) {
 }
 
 function providerLabel(provider: TranscriptionProvider | null) {
-    switch (provider) {
-        case 'xai':
-            return 'xAI';
-        case 'deepgram':
-            return 'Deepgram';
-        case null:
-            return 'Disabled';
-    }
+    if (provider === null)
+        return 'Disabled';
+
+    return TRANSCRIPTION_PROVIDERS.find(candidate => candidate.id === provider)?.label ?? provider;
 }
 
 export default MeetingRecorderExtension;

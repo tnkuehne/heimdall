@@ -27,9 +27,11 @@ mkdir -p "${EXTENSION_DIR}/bin"
 rm -f \
   "${EXTENSION_DIR}/metadata.json" \
   "${EXTENSION_DIR}/extension.js" \
+  "${EXTENSION_DIR}/prefs.js" \
   "${EXTENSION_DIR}/bin/meeting-recorder"
 cp "${ROOT_DIR}/build/extension/metadata.json" "${EXTENSION_DIR}/metadata.json"
 cp "${ROOT_DIR}/build/extension/extension.js" "${EXTENSION_DIR}/extension.js"
+cp "${ROOT_DIR}/build/extension/prefs.js" "${EXTENSION_DIR}/prefs.js"
 cp "${ROOT_DIR}/backend/target/release/meeting-recorder" "${EXTENSION_DIR}/bin/meeting-recorder"
 
 gnome-extensions enable "${UUID}" || true

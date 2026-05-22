@@ -46,13 +46,14 @@ Then enable the extension:
 gnome-extensions enable meeting-recorder@local
 ```
 
-On the first install, GNOME Shell may not discover the newly copied extension until the session restarts. If the enable command says `Extension "meeting-recorder@local" does not exist`, log out and back in, then run the enable command again.
+On GNOME Wayland, log out and back in after installing extension JavaScript or preferences changes. GNOME Shell does not reliably reload changed extension modules inside the same session. If the enable command says `Extension "meeting-recorder@local" does not exist`, log out and back in, then run the enable command again.
 
 ## Usage
 
 - Click the top bar icon to start or stop recording.
 - Use the dropdown menu to start/stop recording or open the recordings folder.
 - Use the `Transcription` submenu to choose `Disabled`, `xAI`, or `Deepgram`.
+- Open `Preferences` from the extension menu or GNOME Extensions to configure API keys.
 - Recordings are saved to:
 
 ```text
@@ -93,10 +94,9 @@ API keys are stored in GNOME Keyring through the Secret Service API. They are no
 
 Configure a provider from the extension menu:
 
-- Open `Transcription`.
-- Select `Set xAI API Key...` or `Set Deepgram API Key...`.
-- Paste the provider API key into the password prompt.
-- Select `xAI` or `Deepgram` in the same menu to enable automatic transcription.
+- Open `Preferences`.
+- Choose the transcription provider.
+- Enter the provider API key in its password row and apply it.
 
 The CLI can also configure keys:
 
@@ -109,7 +109,7 @@ meeting-recorder auth status deepgram
 
 For non-interactive callers, `auth set-stdin <provider>` reads the key from stdin.
 
-Select the provider from the extension menu. The selection is stored in:
+The provider selection is stored in:
 
 ```text
 ~/.config/meeting-recorder/config.json
