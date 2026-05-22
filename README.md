@@ -40,7 +40,7 @@ Then log out and back in if the icon does not appear.
 ## Development Install
 
 ```sh
-./install.sh
+./scripts/install-dev.sh
 ```
 
 Then enable the extension:

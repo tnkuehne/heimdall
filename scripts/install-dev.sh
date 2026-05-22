@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UUID="meeting-recorder@timokuehne.com"
 EXTENSION_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
 
@@ -19,6 +19,7 @@ need gnome-extensions
 need pnpm
 need xdg-open
 
+cd "${ROOT_DIR}"
 CI=true pnpm install --frozen-lockfile
 pnpm run build
 cargo build --release --manifest-path "${ROOT_DIR}/backend/Cargo.toml"
