@@ -1,6 +1,9 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
-use clap::{Parser, Subcommand};
+mod auth;
+mod transcription;
+
+use clap::{ArgAction, Parser, Subcommand};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
@@ -29,6 +32,30 @@ enum CommandKind {
     Stop,
     Status,
     OpenFolder,
+    Auth {
+        #[command(subcommand)]
+        command: AuthCommand,
+    },
+    Transcribe {
+        audio_file: PathBuf,
+        #[arg(long, default_value = "xai")]
+        provider: String,
+        #[arg(long)]
+        language: Option<String>,
+        #[arg(long)]
+        format: bool,
+        #[arg(long = "single-channel", action = ArgAction::SetFalse)]
+        multichannel: bool,
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum AuthCommand {
+    Set { provider: String },
+    Status { provider: String },
+    Delete { provider: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -73,6 +100,26 @@ fn main() -> Result<()> {
                 .context("failed to open recordings folder with xdg-open")?;
             print_json(&serde_json::json!({ "opened": true, "folder": folder }))
         }
+        CommandKind::Auth { command } => match command {
+            AuthCommand::Set { provider } => print_json(&auth::set_api_key(&provider)?),
+            AuthCommand::Status { provider } => print_json(&auth::status(&provider)?),
+            AuthCommand::Delete { provider } => print_json(&auth::delete_api_key(&provider)?),
+        },
+        CommandKind::Transcribe {
+            audio_file,
+            provider,
+            language,
+            format,
+            multichannel,
+            output,
+        } => print_json(&transcription::transcribe(
+            &provider,
+            audio_file,
+            language,
+            format,
+            multichannel,
+            output,
+        )?),
     }
 }
 

@@ -83,6 +83,31 @@ State and logs are written under:
 ~/.local/state/meeting-recorder
 ```
 
+## Transcription
+
+API keys are stored in GNOME Keyring through the Secret Service API. They are not written to the recorder state or config files.
+
+Configure xAI:
+
+```sh
+meeting-recorder auth set xai
+meeting-recorder auth status xai
+```
+
+Transcribe a recording:
+
+```sh
+meeting-recorder transcribe ~/Recordings/Meetings/example.mp3 --provider xai
+```
+
+By default, xAI transcription is requested with multichannel mode enabled, matching the recorder's stereo layout. The transcript Markdown document is written next to the recording as:
+
+```text
+example.xai.transcript.md
+```
+
+Use `--output <path>` to choose a different transcript path. Use `--language <code> --format` when requesting formatted xAI output, because xAI requires a language when formatting is enabled.
+
 ## Development
 
 The GNOME Shell source of truth is TypeScript:
