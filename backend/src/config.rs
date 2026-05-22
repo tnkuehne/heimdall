@@ -1,15 +1,26 @@
 use crate::auth;
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const CONFIG_DIR_NAME: &str = "meeting-recorder";
 const CONFIG_FILE_NAME: &str = "config.json";
 
-#[derive(Debug, Serialize, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub transcription_provider: Option<String>,
+    #[serde(default = "default_recordings_dir_unchecked")]
+    pub recordings_dir: PathBuf,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            transcription_provider: None,
+            recordings_dir: default_recordings_dir_unchecked(),
+        }
+    }
 }
 
 pub fn get() -> Result<Config> {
@@ -21,6 +32,49 @@ pub fn set_transcription_provider(provider: &str) -> Result<Config> {
     config.transcription_provider = normalize_optional_provider(provider)?.map(ToOwned::to_owned);
     write_config(&config)?;
     Ok(config)
+}
+
+pub fn set_recordings_dir(path: &Path) -> Result<Config> {
+    if !path.is_absolute() {
+        bail!("recordings directory must be an absolute path");
+    }
+
+    std::fs::create_dir_all(path)
+        .with_context(|| format!("failed to create recordings directory {}", path.display()))?;
+    if !path.is_dir() {
+        bail!(
+            "recordings directory is not a directory: {}",
+            path.display()
+        );
+    }
+
+    let mut config = read_config()?;
+    config.recordings_dir = path.to_path_buf();
+    write_config(&config)?;
+    Ok(config)
+}
+
+pub fn reset_recordings_dir() -> Result<Config> {
+    let mut config = read_config()?;
+    config.recordings_dir = default_recordings_dir()?;
+    write_config(&config)?;
+    Ok(config)
+}
+
+pub fn recordings_dir() -> Result<PathBuf> {
+    Ok(read_config()?.recordings_dir)
+}
+
+pub fn default_recordings_dir() -> Result<PathBuf> {
+    let home = dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory"))?;
+    Ok(home.join("Recordings").join("Meetings"))
+}
+
+fn default_recordings_dir_unchecked() -> PathBuf {
+    dirs::home_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Recordings")
+        .join("Meetings")
 }
 
 fn normalize_optional_provider(provider: &str) -> Result<Option<&'static str>> {

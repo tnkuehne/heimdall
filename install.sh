@@ -41,6 +41,7 @@ Installed ${UUID} to:
   ${EXTENSION_DIR}
 
 If the icon does not appear immediately, log out and back in.
-Recordings are saved under:
+The recordings folder can be changed in Preferences.
+Default recordings folder:
   ${HOME}/Recordings/Meetings
 EOF

@@ -68,6 +68,8 @@ enum AuthCommand {
 enum ConfigCommand {
     Get,
     SetProvider { provider: String },
+    SetRecordingsDir { path: PathBuf },
+    ResetRecordingsDir,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -101,7 +103,7 @@ fn main() -> Result<()> {
         CommandKind::Stop => print_json(&stop()?),
         CommandKind::Status => print_json(&status()?),
         CommandKind::OpenFolder => {
-            let folder = recordings_dir()?;
+            let folder = config::recordings_dir()?;
             fs::create_dir_all(&folder)?;
             Command::new("xdg-open")
                 .arg(&folder)
@@ -117,6 +119,10 @@ fn main() -> Result<()> {
             ConfigCommand::SetProvider { provider } => {
                 print_json(&config::set_transcription_provider(&provider)?)
             }
+            ConfigCommand::SetRecordingsDir { path } => {
+                print_json(&config::set_recordings_dir(&path)?)
+            }
+            ConfigCommand::ResetRecordingsDir => print_json(&config::reset_recordings_dir()?),
         },
         CommandKind::Auth { command } => match command {
             AuthCommand::Set { provider } => print_json(&auth::set_api_key(&provider)?),
@@ -153,7 +159,7 @@ fn start() -> Result<RecordingState> {
         return Ok(current);
     }
 
-    let recordings = recordings_dir()?;
+    let recordings = config::recordings_dir()?;
     let state_dir = state_dir()?;
     fs::create_dir_all(&recordings)?;
     fs::create_dir_all(&state_dir)?;
@@ -373,11 +379,6 @@ fn default_pipewire_node_name(node: &str) -> Result<String> {
     }
 
     bail!("wpctl inspect {node} did not include node.name");
-}
-
-fn recordings_dir() -> Result<PathBuf> {
-    let home = dirs::home_dir().ok_or_else(|| anyhow!("could not determine home directory"))?;
-    Ok(home.join("Recordings").join("Meetings"))
 }
 
 fn state_dir() -> Result<PathBuf> {

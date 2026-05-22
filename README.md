@@ -53,8 +53,8 @@ On GNOME Wayland, log out and back in after installing extension JavaScript or p
 - Click the top bar icon to start or stop recording.
 - Use the dropdown menu to start/stop recording or open the recordings folder.
 - Use the `Transcription` submenu to choose `Disabled`, `xAI`, or `Deepgram`.
-- Open `Preferences` from the extension menu or GNOME Extensions to configure API keys.
-- Recordings are saved to:
+- Open `Preferences` from the extension menu or GNOME Extensions to choose the recordings folder and configure API keys.
+- Recordings are saved to this folder by default:
 
 ```text
 ~/Recordings/Meetings
@@ -80,6 +80,9 @@ meeting-recorder start
 meeting-recorder stop
 meeting-recorder status
 meeting-recorder open-folder
+meeting-recorder config get
+meeting-recorder config set-recordings-dir /absolute/path
+meeting-recorder config reset-recordings-dir
 ```
 
 State and logs are written under:
@@ -109,7 +112,7 @@ meeting-recorder auth status deepgram
 
 For non-interactive callers, `auth set-stdin <provider>` reads the key from stdin.
 
-The provider selection is stored in:
+The provider selection and recordings folder are stored in:
 
 ```text
 ~/.config/meeting-recorder/config.json

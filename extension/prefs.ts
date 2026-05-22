@@ -19,6 +19,7 @@ type TranscriptionProvider = typeof TRANSCRIPTION_PROVIDERS[number]['id'];
 
 type BackendConfig = {
     transcription_provider: TranscriptionProvider | null;
+    recordings_dir: string;
 };
 
 type AuthStatus = {
@@ -35,6 +36,8 @@ type ProviderKeyWidgets = {
 export default class MeetingRecorderPreferences extends ExtensionPreferences {
     private _backendPath = '';
     private _providerRow: Adw.ComboRow | null = null;
+    private _recordingsDirRow: Adw.ActionRow | null = null;
+    private _resetRecordingsDirButton: Gtk.Button | null = null;
     private _loadingProvider = false;
 
     override fillPreferencesWindow(window: Adw.PreferencesWindow) {
@@ -48,9 +51,34 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 
         const recordingGroup = new Adw.PreferencesGroup({
             title: 'Recording',
-            description: 'Audio files are saved in ~/Recordings/Meetings.',
         });
         page.add(recordingGroup);
+
+        const recordingsDirRow = new Adw.ActionRow({
+            title: 'Save recordings to',
+            subtitle: defaultRecordingsDir(),
+            subtitle_selectable: true,
+            use_markup: false,
+        });
+        const chooseRecordingsDirButton = new Gtk.Button({
+            label: 'Choose...',
+            valign: Gtk.Align.CENTER,
+        });
+        chooseRecordingsDirButton.connect('clicked', () => this._chooseRecordingsDir(window));
+
+        const resetRecordingsDirButton = new Gtk.Button({
+            label: 'Reset',
+            valign: Gtk.Align.CENTER,
+            visible: false,
+        });
+        resetRecordingsDirButton.connect('clicked', () => this._resetRecordingsDir(window));
+
+        recordingsDirRow.add_suffix(resetRecordingsDirButton);
+        recordingsDirRow.add_suffix(chooseRecordingsDirButton);
+        recordingsDirRow.set_activatable_widget(chooseRecordingsDirButton);
+        recordingGroup.add(recordingsDirRow);
+        this._recordingsDirRow = recordingsDirRow;
+        this._resetRecordingsDirButton = resetRecordingsDirButton;
 
         const providerModel = Gtk.StringList.new(
             PROVIDER_OPTIONS.map(provider => providerLabel(provider))
@@ -115,7 +143,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
         keyWidgets: Map<TranscriptionProvider, ProviderKeyWidgets>
     ) {
         this._runBackend<BackendConfig>(['config', 'get'])
-            .then(config => this._applyProvider(config.transcription_provider))
+            .then(config => this._applyConfig(config))
             .catch(error => this._showError(window, error));
 
         for (const provider of TRANSCRIPTION_PROVIDERS) {
@@ -138,6 +166,19 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
         this._loadingProvider = false;
     }
 
+    private _applyConfig(config: BackendConfig) {
+        this._applyProvider(config.transcription_provider);
+        this._applyRecordingsDir(config.recordings_dir);
+    }
+
+    private _applyRecordingsDir(path: string) {
+        if (!this._recordingsDirRow || !this._resetRecordingsDirButton)
+            return;
+
+        this._recordingsDirRow.set_subtitle(path);
+        this._resetRecordingsDirButton.set_visible(path !== defaultRecordingsDir());
+    }
+
     private _setTranscriptionProvider(
         provider: TranscriptionProvider | null,
         window: Adw.PreferencesWindow
@@ -145,8 +186,58 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
         const value = provider ?? 'disabled';
         this._runBackend<BackendConfig>(['config', 'set-provider', value])
             .then(config => {
-                this._applyProvider(config.transcription_provider);
+                this._applyConfig(config);
                 this._toast(window, `Transcription provider: ${providerLabel(config.transcription_provider)}`);
+            })
+            .catch(error => this._showError(window, error));
+    }
+
+    private _chooseRecordingsDir(window: Adw.PreferencesWindow) {
+        const dialog = Gtk.FileChooserNative.new(
+            'Choose Recordings Folder',
+            window,
+            Gtk.FileChooserAction.SELECT_FOLDER,
+            'Choose',
+            'Cancel'
+        );
+        dialog.set_modal(true);
+        dialog.set_create_folders(true);
+        dialog.set_current_folder(Gio.File.new_for_path(this._recordingsDirRow?.get_subtitle() ?? defaultRecordingsDir()));
+
+        dialog.connect('response', (_source, response) => {
+            try {
+                if (response !== Gtk.ResponseType.ACCEPT)
+                    return;
+
+                const folder = dialog.get_file();
+                const path = folder?.get_path();
+                if (!path) {
+                    this._toast(window, 'Only local folders are supported');
+                    return;
+                }
+
+                this._setRecordingsDir(path, window);
+            } finally {
+                dialog.destroy();
+            }
+        });
+        dialog.show();
+    }
+
+    private _setRecordingsDir(path: string, window: Adw.PreferencesWindow) {
+        this._runBackend<BackendConfig>(['config', 'set-recordings-dir', path])
+            .then(config => {
+                this._applyConfig(config);
+                this._toast(window, 'Recordings folder updated');
+            })
+            .catch(error => this._showError(window, error));
+    }
+
+    private _resetRecordingsDir(window: Adw.PreferencesWindow) {
+        this._runBackend<BackendConfig>(['config', 'reset-recordings-dir'])
+            .then(config => {
+                this._applyConfig(config);
+                this._toast(window, 'Recordings folder reset');
             })
             .catch(error => this._showError(window, error));
     }
@@ -251,6 +342,10 @@ function providerLabel(provider: TranscriptionProvider | null) {
         return 'Off';
 
     return TRANSCRIPTION_PROVIDERS.find(candidate => candidate.id === provider)?.label ?? provider;
+}
+
+function defaultRecordingsDir() {
+    return GLib.build_filenamev([GLib.get_home_dir(), 'Recordings', 'Meetings']);
 }
 
 function errorMessage(error: unknown) {
