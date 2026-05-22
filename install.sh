@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-UUID="meeting-recorder@local"
+UUID="meeting-recorder@timokuehne.com"
 EXTENSION_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
 
 need() {

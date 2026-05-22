@@ -7,13 +7,17 @@ The recorder uses `wpctl` to find the default microphone and current default sys
 ## Requirements
 
 - GNOME Shell 46
-- Rust/Cargo
-- pnpm
 - `ffmpeg`
 - `wpctl`
 - `gnome-extensions`
 
-Install Rust/Cargo with `rustup`:
+On Debian/Ubuntu-like systems, the `.deb` package declares the runtime dependencies. For source development, install the build tools and runtime commands:
+
+```sh
+sudo apt install wireplumber ffmpeg gnome-shell
+```
+
+Install Rust/Cargo with `rustup` for development builds:
 
 ```sh
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -22,19 +26,18 @@ rustup default stable
 
 After installing `rustup`, restart the shell or run `source "$HOME/.cargo/env"` so `cargo` is on `PATH`.
 
-On Fedora-like systems:
+## Install From Deb
+
+Install a release package:
 
 ```sh
-sudo dnf install wireplumber ffmpeg gnome-extensions-app
+sudo apt install ./meeting-recorder_0.1.0_amd64.deb
+gnome-extensions enable meeting-recorder@timokuehne.com
 ```
 
-On Debian/Ubuntu-like systems:
+Then log out and back in if the icon does not appear.
 
-```sh
-sudo apt install wireplumber ffmpeg gnome-shell-extension-prefs
-```
-
-## Install
+## Development Install
 
 ```sh
 ./install.sh
@@ -43,10 +46,10 @@ sudo apt install wireplumber ffmpeg gnome-shell-extension-prefs
 Then enable the extension:
 
 ```sh
-gnome-extensions enable meeting-recorder@local
+gnome-extensions enable meeting-recorder@timokuehne.com
 ```
 
-On GNOME Wayland, log out and back in after installing extension JavaScript or preferences changes. GNOME Shell does not reliably reload changed extension modules inside the same session. If the enable command says `Extension "meeting-recorder@local" does not exist`, log out and back in, then run the enable command again.
+On GNOME Wayland, log out and back in after installing extension JavaScript or preferences changes. GNOME Shell does not reliably reload changed extension modules inside the same session. If the enable command says `Extension "meeting-recorder@timokuehne.com" does not exist`, log out and back in, then run the enable command again.
 
 ## Usage
 
@@ -67,10 +70,16 @@ next to the audio file.
 
 ## Backend
 
-The Rust CLI is installed inside the extension directory:
+The `.deb` installs the Rust CLI on `PATH`:
 
 ```text
-~/.local/share/gnome-shell/extensions/meeting-recorder@local/bin/meeting-recorder
+/usr/bin/meeting-recorder
+```
+
+The backend binary also lives inside the extension directory:
+
+```text
+/usr/share/gnome-shell/extensions/meeting-recorder@timokuehne.com/bin/meeting-recorder
 ```
 
 Commands:
@@ -175,3 +184,17 @@ pnpm run build
 Generated GNOME Shell files are written to `build/extension` and should not be committed.
 
 GNOME/GJS types come from the published `@girs/gnome-shell` package pinned for GNOME Shell 46.
+
+Build a Debian package with:
+
+```sh
+./scripts/build-deb.sh
+```
+
+The package is written to:
+
+```text
+build/deb/meeting-recorder_0.1.0_amd64.deb
+```
+
+GitHub Actions builds and uploads the `.deb` automatically when a tag like `v0.1.0` is pushed.

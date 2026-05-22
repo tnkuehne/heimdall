@@ -1,8 +1,8 @@
 {
-  "uuid": "meeting-recorder@local",
+  "uuid": "meeting-recorder@timokuehne.com",
   "name": "Meeting Recorder",
   "description": "Record the default microphone and current system audio from the GNOME top bar.",
   "shell-version": ["46"],
-  "url": "https://example.invalid/meeting-recorder",
+  "url": "https://timokuehne.com",
   "version": 1
 }
