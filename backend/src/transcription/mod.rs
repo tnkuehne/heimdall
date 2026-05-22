@@ -84,6 +84,8 @@ fn render_markdown(response: &Value) -> String {
         for turn in turns {
             let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
         }
+    } else if is_empty_transcription(response) {
+        markdown.push_str("_No speech was detected in this recording._\n");
     } else {
         markdown.push_str("```json\n");
         markdown.push_str(
@@ -113,13 +115,26 @@ fn transcript_text(response: &Value) -> Option<String> {
     response
         .get("text")
         .and_then(Value::as_str)
+        .filter(|text| !text.trim().is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| {
-            response
-                .pointer("/results/channels/0/alternatives/0/transcript")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
+        .or_else(|| first_deepgram_transcript(response))
+}
+
+fn first_deepgram_transcript(response: &Value) -> Option<String> {
+    response
+        .pointer("/results/channels")
+        .and_then(Value::as_array)?
+        .iter()
+        .filter_map(|channel| {
+            channel
+                .get("alternatives")
+                .and_then(Value::as_array)?
+                .iter()
+                .filter_map(|alternative| alternative.get("transcript").and_then(Value::as_str))
+                .find(|transcript| !transcript.trim().is_empty())
         })
+        .map(ToOwned::to_owned)
+        .next()
 }
 
 fn transcript_duration(response: &Value) -> Option<f64> {
@@ -138,6 +153,41 @@ fn transcript_channels(response: &Value) -> Option<Value> {
         .get("channels")
         .cloned()
         .or_else(|| response.pointer("/results/channels").cloned())
+}
+
+fn is_empty_transcription(response: &Value) -> bool {
+    let utterances_empty = response
+        .pointer("/results/utterances")
+        .and_then(Value::as_array)
+        .is_none_or(Vec::is_empty);
+    let channels = response
+        .pointer("/results/channels")
+        .and_then(Value::as_array);
+
+    let Some(channels) = channels else {
+        return false;
+    };
+
+    utterances_empty
+        && channels.iter().all(|channel| {
+            channel
+                .get("alternatives")
+                .and_then(Value::as_array)
+                .is_none_or(|alternatives| {
+                    alternatives.iter().all(|alternative| {
+                        let transcript_empty = alternative
+                            .get("transcript")
+                            .and_then(Value::as_str)
+                            .is_none_or(|transcript| transcript.trim().is_empty());
+                        let words_empty = alternative
+                            .get("words")
+                            .and_then(Value::as_array)
+                            .is_none_or(Vec::is_empty);
+
+                        transcript_empty && words_empty
+                    })
+                })
+        })
 }
 
 fn deepgram_utterance_turns(response: &Value) -> Option<Vec<Turn>> {
@@ -169,6 +219,10 @@ fn deepgram_utterance_turns(response: &Value) -> Option<Vec<Turn>> {
 }
 
 fn deepgram_speaker(utterance: &Value) -> String {
+    if let Some(speaker) = utterance.get("speaker").and_then(Value::as_u64) {
+        return format!("Speaker {}", speaker + 1);
+    }
+
     let channel = utterance
         .get("channel")
         .and_then(Value::as_u64)
@@ -182,21 +236,15 @@ fn deepgram_speaker(utterance: &Value) -> String {
 
     match channel {
         Some(0) => "Me".to_string(),
-        Some(_) => utterance
-            .get("speaker")
-            .and_then(Value::as_u64)
-            .map(|speaker| format!("Speaker {}", speaker + 1))
-            .unwrap_or_else(|| "Meeting".to_string()),
-        None => utterance
-            .get("speaker")
-            .and_then(Value::as_u64)
-            .map(|speaker| format!("Speaker {}", speaker + 1))
-            .unwrap_or_else(|| "Speaker".to_string()),
+        Some(_) => "Meeting".to_string(),
+        None => "Speaker".to_string(),
     }
 }
 
 fn transcript_turns(response: &Value) -> Option<Vec<Turn>> {
-    let channels = response.get("channels")?;
+    let channels = response
+        .get("channels")
+        .or_else(|| response.pointer("/results/channels"))?;
     let mut words = channel_words(channels);
 
     if words.is_empty() {

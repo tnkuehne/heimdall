@@ -19,7 +19,7 @@ impl TranscriptionProvider for DeepgramProvider {
             .with_context(|| format!("failed to read {}", request.audio_file.display()))?;
 
         let mut query = vec![
-            ("model", "nova-3".to_string()),
+            ("model", "nova-3-general".to_string()),
             ("smart_format", "true".to_string()),
             ("punctuate", "true".to_string()),
             ("utterances", "true".to_string()),
@@ -29,6 +29,8 @@ impl TranscriptionProvider for DeepgramProvider {
 
         if let Some(language) = &request.language {
             query.push(("language", language.clone()));
+        } else {
+            query.push(("detect_language", "true".to_string()));
         }
 
         let response = Client::new()
