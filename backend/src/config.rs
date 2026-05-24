@@ -11,6 +11,8 @@ const CONFIG_FILE_NAME: &str = "config.json";
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub transcription_provider: Option<String>,
+    #[serde(default = "default_meeting_detection_reminder_enabled")]
+    pub meeting_detection_reminder_enabled: bool,
     #[serde(default = "default_recordings_dir_unchecked")]
     pub recordings_dir: PathBuf,
     pub post_transcribe_hook: Option<PathBuf>,
@@ -20,6 +22,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             transcription_provider: None,
+            meeting_detection_reminder_enabled: default_meeting_detection_reminder_enabled(),
             recordings_dir: default_recordings_dir_unchecked(),
             post_transcribe_hook: None,
         }
@@ -53,6 +56,13 @@ pub fn set_recordings_dir(path: &Path) -> Result<Config> {
 
     let mut config = read_config()?;
     config.recordings_dir = path.to_path_buf();
+    write_config(&config)?;
+    Ok(config)
+}
+
+pub fn set_meeting_detection_reminder(enabled: bool) -> Result<Config> {
+    let mut config = read_config()?;
+    config.meeting_detection_reminder_enabled = enabled;
     write_config(&config)?;
     Ok(config)
 }
@@ -105,6 +115,10 @@ fn default_recordings_dir_unchecked() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Recordings")
         .join("Meetings")
+}
+
+fn default_meeting_detection_reminder_enabled() -> bool {
+    true
 }
 
 fn normalize_optional_provider(provider: &str) -> Result<Option<&'static str>> {

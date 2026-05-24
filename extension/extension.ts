@@ -41,6 +41,7 @@ type BackendStatus = {
 
 type BackendConfig = {
     transcription_provider: TranscriptionProvider | null;
+    meeting_detection_reminder_enabled: boolean;
 };
 
 type TranscriptionSummary = {
@@ -115,6 +116,7 @@ class MeetingRecorderIndicator {
     private _recording = false;
     private _lastFile: string | null = null;
     private _transcriptionProvider: TranscriptionProvider | null = null;
+    private _meetingDetectionReminderEnabled = true;
 
     constructor(extension: MeetingRecorderExtension) {
         this._extension = extension;
@@ -183,6 +185,7 @@ class MeetingRecorderIndicator {
         try {
             const status = await this._runBackend<BackendStatus>(['status']);
             this._applyStatus(status);
+            await this._loadConfig();
         } catch (error) {
             this._recording = false;
             this._setUi(false, 'Recorder unavailable', 'Start Recording');
@@ -272,6 +275,7 @@ class MeetingRecorderIndicator {
     private async _loadConfig() {
         const config = await this._runBackend<BackendConfig>(['config', 'get']);
         this._applyTranscriptionProvider(config.transcription_provider);
+        this._meetingDetectionReminderEnabled = config.meeting_detection_reminder_enabled;
     }
 
     private async _setTranscriptionProvider(provider: TranscriptionProvider | null) {
@@ -326,6 +330,8 @@ class MeetingRecorderIndicator {
     }
 
     private _maybeNotifyMeetingDetected() {
+        if (!this._meetingDetectionReminderEnabled)
+            return;
         if (this._recording)
             return;
 

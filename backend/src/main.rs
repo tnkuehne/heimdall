@@ -71,6 +71,7 @@ enum AuthCommand {
 enum ConfigCommand {
     Get,
     SetProvider { provider: String },
+    SetMeetingDetectionReminder { enabled: String },
     SetRecordingsDir { path: PathBuf },
     ResetRecordingsDir,
     SetPostTranscribeHook { path: PathBuf },
@@ -231,6 +232,9 @@ fn main() -> Result<()> {
             ConfigCommand::Get => print_json(&config::get()?),
             ConfigCommand::SetProvider { provider } => {
                 print_json(&config::set_transcription_provider(&provider)?)
+            }
+            ConfigCommand::SetMeetingDetectionReminder { enabled } => {
+                print_json(&config::set_meeting_detection_reminder(parse_bool(&enabled)?)?)
             }
             ConfigCommand::SetRecordingsDir { path } => {
                 print_json(&config::set_recordings_dir(&path)?)
@@ -606,6 +610,14 @@ fn is_browser_identifier(value: &str) -> bool {
     ["chrome", "chromium", "brave", "msedge", "firefox"]
         .iter()
         .any(|browser| value.contains(browser))
+}
+
+fn parse_bool(value: &str) -> Result<bool> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "yes" | "on" | "1" => Ok(true),
+        "false" | "no" | "off" | "0" => Ok(false),
+        _ => bail!("expected true or false"),
+    }
 }
 
 fn state_dir() -> Result<PathBuf> {

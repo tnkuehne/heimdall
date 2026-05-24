@@ -19,6 +19,7 @@ type TranscriptionProvider = typeof TRANSCRIPTION_PROVIDERS[number]['id'];
 
 type BackendConfig = {
     transcription_provider: TranscriptionProvider | null;
+    meeting_detection_reminder_enabled: boolean;
     recordings_dir: string;
     post_transcribe_hook: string | null;
 };
@@ -37,11 +38,13 @@ type ProviderKeyWidgets = {
 export default class MeetingRecorderPreferences extends ExtensionPreferences {
     private _backendPath = '';
     private _providerRow: Adw.ComboRow | null = null;
+    private _meetingDetectionReminderRow: Adw.SwitchRow | null = null;
     private _recordingsDirRow: Adw.ActionRow | null = null;
     private _resetRecordingsDirButton: Gtk.Button | null = null;
     private _postTranscribeHookRow: Adw.ActionRow | null = null;
     private _clearPostTranscribeHookButton: Gtk.Button | null = null;
     private _loadingProvider = false;
+    private _loadingMeetingDetectionReminder = false;
 
     override fillPreferencesWindow(window: Adw.PreferencesWindow) {
         this._backendPath = GLib.build_filenamev([this.path, 'bin', 'meeting-recorder']);
@@ -104,6 +107,19 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
             title: 'Automation',
         });
         page.add(automationGroup);
+
+        const meetingDetectionReminderRow = new Adw.SwitchRow({
+            title: 'Meeting reminders',
+            subtitle: 'Notify when a browser meeting starts using microphone or camera.',
+        });
+        meetingDetectionReminderRow.connect('notify::active', () => {
+            if (this._loadingMeetingDetectionReminder)
+                return;
+
+            this._setMeetingDetectionReminder(meetingDetectionReminderRow.get_active(), window);
+        });
+        automationGroup.add(meetingDetectionReminderRow);
+        this._meetingDetectionReminderRow = meetingDetectionReminderRow;
 
         const postTranscribeHookRow = new Adw.ActionRow({
             title: 'Post-transcribe hook',
@@ -202,8 +218,18 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 
     private _applyConfig(config: BackendConfig) {
         this._applyProvider(config.transcription_provider);
+        this._applyMeetingDetectionReminder(config.meeting_detection_reminder_enabled);
         this._applyRecordingsDir(config.recordings_dir);
         this._applyPostTranscribeHook(config.post_transcribe_hook);
+    }
+
+    private _applyMeetingDetectionReminder(enabled: boolean) {
+        if (!this._meetingDetectionReminderRow)
+            return;
+
+        this._loadingMeetingDetectionReminder = true;
+        this._meetingDetectionReminderRow.set_active(enabled);
+        this._loadingMeetingDetectionReminder = false;
     }
 
     private _applyRecordingsDir(path: string) {
@@ -231,6 +257,15 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
             .then(config => {
                 this._applyConfig(config);
                 this._toast(window, `Transcription provider: ${providerLabel(config.transcription_provider)}`);
+            })
+            .catch(error => this._showError(window, error));
+    }
+
+    private _setMeetingDetectionReminder(enabled: boolean, window: Adw.PreferencesWindow) {
+        this._runBackend<BackendConfig>(['config', 'set-meeting-detection-reminder', String(enabled)])
+            .then(config => {
+                this._applyConfig(config);
+                this._toast(window, `Meeting reminders ${enabled ? 'enabled' : 'disabled'}`);
             })
             .catch(error => this._showError(window, error));
     }
