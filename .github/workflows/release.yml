@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up pnpm
         uses: pnpm/action-setup@v4
@@ -40,16 +42,49 @@ jobs:
       - name: Build Debian package
         run: ./scripts/build-deb.sh
 
+      - name: Read package version
+        id: package
+        run: |
+          package_version="$(sed -n 's/^version = "\(.*\)"/\1/p' backend/Cargo.toml | head -n 1)"
+          if [ -z "${package_version}" ]; then
+            echo "Could not read package version from backend/Cargo.toml" >&2
+            exit 1
+          fi
+          deb_path="build/deb/meeting-recorder_${package_version}_amd64.deb"
+          test -f "${deb_path}"
+          echo "version=${package_version}" >>"${GITHUB_OUTPUT}"
+          echo "tag=v${package_version}" >>"${GITHUB_OUTPUT}"
+          echo "deb_path=${deb_path}" >>"${GITHUB_OUTPUT}"
+
       - name: Check tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
         run: |
-          package_version="$(sed -n 's/^version = "\(.*\)"/\1/p' backend/Cargo.toml | head -n 1)"
           tag_version="${GITHUB_REF_NAME#v}"
-          if [ "${tag_version}" != "${package_version}" ]; then
-            echo "Tag ${GITHUB_REF_NAME} does not match package version ${package_version}" >&2
+          if [ "${tag_version}" != "${{ steps.package.outputs.version }}" ]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match package version ${{ steps.package.outputs.version }}" >&2
             exit 1
           fi
-          test -f "build/deb/meeting-recorder_${package_version}_amd64.deb"
+
+      - name: Check whether package version changed
+        id: version-change
+        if: github.ref == 'refs/heads/main'
+        run: |
+          changed=false
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            changed=true
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            previous_version="$(
+              git show "${{ github.event.before }}:backend/Cargo.toml" \
+                | sed -n 's/^version = "\(.*\)"/\1/p' \
+                | head -n 1
+            )"
+            if [ "${previous_version}" != "${{ steps.package.outputs.version }}" ]; then
+              changed=true
+            fi
+          fi
+
+          echo "changed=${changed}" >>"${GITHUB_OUTPUT}"
 
       - name: Upload package artifact
         uses: actions/upload-artifact@v4
@@ -57,6 +92,26 @@ jobs:
           name: meeting-recorder-deb
           path: build/deb/*.deb
           if-no-files-found: error
+
+      - name: Create draft GitHub release
+        if: github.ref == 'refs/heads/main' && steps.version-change.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.package.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.package.outputs.version }}
+          DEB_PATH: ${{ steps.package.outputs.deb_path }}
+        run: |
+          if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists; skipping draft release creation."
+            exit 0
+          fi
+
+          gh release create "${RELEASE_TAG}" \
+            "${DEB_PATH}" \
+            --draft \
+            --target "${GITHUB_SHA}" \
+            --title "Meeting Recorder ${RELEASE_VERSION}" \
+            --notes "Draft release for Meeting Recorder ${RELEASE_VERSION}."
 
       - name: Upload package to GitHub release
         if: startsWith(github.ref, 'refs/tags/')
