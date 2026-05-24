@@ -6,7 +6,7 @@
     "moduleResolution": "bundler",
     "useDefineForClassFields": false,
     "skipLibCheck": true,
-    "types": ["@girs/gnome-shell/ambient"],
+    "types": ["@girs/gnome-shell/ambient", "@girs/gnome-shell/extensions/global"],
     "rootDir": "extension",
     "outDir": "build/extension"
   },

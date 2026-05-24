@@ -1,6 +1,7 @@
 import St from 'gi://St';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
+import Meta from 'gi://Meta';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -9,6 +10,13 @@ import * as PanelMenu from 'resource:///org/gnome/shell/ui/panelMenu.js';
 import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const STATUS_INTERVAL_SECONDS = 2;
+const MEETING_REMINDER_COOLDOWN_SECONDS = 10 * 60;
+const MEETING_WINDOW_PATTERNS = [
+    'google meet',
+    'meet.google.com',
+    'microsoft teams',
+    'teams.microsoft.com',
+] as const;
 
 const TRANSCRIPTION_PROVIDERS = [
     {id: 'xai', label: 'xAI'},
@@ -85,6 +93,10 @@ class MeetingRecorderIndicator {
     private readonly _providerDisabledItem: PopupMenu.PopupMenuItem;
     private readonly _providerItems = new Map<TranscriptionProvider, PopupMenu.PopupMenuItem>();
     private _notificationSource: MessageTray.Source | null = null;
+    private _focusedWindow: Meta.Window | null = null;
+    private _focusedWindowTitleSignalId: number | null = null;
+    private _focusWindowSignalId: number | null = null;
+    private _lastMeetingReminderAt = 0;
     private _recording = false;
     private _lastFile: string | null = null;
     private _transcriptionProvider: TranscriptionProvider | null = null;
@@ -133,9 +145,18 @@ class MeetingRecorderIndicator {
         this._menu.addMenuItem(this._preferencesItem);
 
         this._loadConfig().catch(error => this._notifyError(error));
+        this._watchFocusedWindow();
+        this._focusWindowSignalId = global.display.connect('notify::focus-window', () => {
+            this._watchFocusedWindow();
+        });
     }
 
     destroy() {
+        if (this._focusWindowSignalId !== null) {
+            global.display.disconnect(this._focusWindowSignalId);
+            this._focusWindowSignalId = null;
+        }
+        this._disconnectFocusedWindow();
         this._notificationSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
         this._notificationSource = null;
         this.button.destroy();
@@ -265,6 +286,77 @@ class MeetingRecorderIndicator {
             .catch(error => this._notifyError(error));
     }
 
+    private _watchFocusedWindow() {
+        this._disconnectFocusedWindow();
+
+        const window = global.display.focus_window ?? null;
+        this._focusedWindow = window;
+        if (window) {
+            this._focusedWindowTitleSignalId = window.connect('notify::title', () => {
+                this._maybeNotifyMeetingDetected();
+            });
+        }
+
+        this._maybeNotifyMeetingDetected();
+    }
+
+    private _disconnectFocusedWindow() {
+        if (this._focusedWindow && this._focusedWindowTitleSignalId !== null)
+            this._focusedWindow.disconnect(this._focusedWindowTitleSignalId);
+
+        this._focusedWindow = null;
+        this._focusedWindowTitleSignalId = null;
+    }
+
+    private _maybeNotifyMeetingDetected() {
+        if (this._recording)
+            return;
+
+        const window = this._focusedWindow;
+        if (!window)
+            return;
+
+        const title = window.get_title();
+        const wmClass = window.get_wm_class() ?? '';
+        if (!isMeetingWindow(title, wmClass))
+            return;
+
+        const now = GLib.get_monotonic_time() / 1_000_000;
+        if (now - this._lastMeetingReminderAt < MEETING_REMINDER_COOLDOWN_SECONDS)
+            return;
+
+        this._lastMeetingReminderAt = now;
+        this._notifyMeetingDetected(title);
+    }
+
+    private _notifyMeetingDetected(title: string) {
+        const source = this._getNotificationSource();
+        const notification = new MessageTray.Notification({
+            source,
+            title: 'Meeting detected',
+            body: `Start recording? ${title}`,
+            iconName: 'media-record-symbolic',
+        });
+
+        notification.connect('activated', () => {
+            notification.destroy(MessageTray.NotificationDestroyedReason.DISMISSED);
+            this._startRecordingFromReminder();
+        });
+        notification.addAction('Start Recording', () => {
+            notification.destroy(MessageTray.NotificationDestroyedReason.DISMISSED);
+            this._startRecordingFromReminder();
+        });
+        notification.addAction('Dismiss', () => {
+            notification.destroy(MessageTray.NotificationDestroyedReason.DISMISSED);
+        });
+        source.addNotification(notification);
+    }
+
+    private _startRecordingFromReminder() {
+        if (!this._recording)
+            this._toggleRecording();
+    }
+
     private _notifyRecordingSaved(file: string) {
         const source = this._getNotificationSource();
         const notification = new MessageTray.Notification({
@@ -356,6 +448,11 @@ function providerLabel(provider: TranscriptionProvider | null) {
         return 'Disabled';
 
     return TRANSCRIPTION_PROVIDERS.find(candidate => candidate.id === provider)?.label ?? provider;
+}
+
+function isMeetingWindow(title: string, wmClass: string) {
+    const haystack = `${title}\n${wmClass}`.toLocaleLowerCase();
+    return MEETING_WINDOW_PATTERNS.some(pattern => haystack.includes(pattern));
 }
 
 export default MeetingRecorderExtension;
