@@ -11,11 +11,16 @@ import * as PopupMenu from 'resource:///org/gnome/shell/ui/popupMenu.js';
 
 const STATUS_INTERVAL_SECONDS = 2;
 const MEETING_REMINDER_COOLDOWN_SECONDS = 10 * 60;
-const MEETING_WINDOW_PATTERNS = [
+const GOOGLE_MEET_TITLE_MARKERS = [
     'google meet',
-    'meet.google.com',
-    'microsoft teams',
-    'teams.microsoft.com',
+    'meet - google chrome',
+] as const;
+const GOOGLE_MEET_URL_MARKER = 'meet.google.com';
+const TEAMS_TITLE_MARKER = 'microsoft teams';
+const TEAMS_URL_MARKER = 'teams.microsoft.com';
+const CHROME_WINDOW_MARKERS = [
+    'google chrome',
+    'google-chrome',
 ] as const;
 
 const TRANSCRIPTION_PROVIDERS = [
@@ -45,6 +50,13 @@ type TranscriptionSummary = {
     text: string | null;
     duration: number | null;
     post_transcribe_hook_error: string | null;
+};
+
+type CaptureStateEvent = {
+    type: 'capture-state';
+    browser_audio_capture: boolean;
+    browser_video_capture: boolean;
+    browser_capture: boolean;
 };
 
 class MeetingRecorderExtension extends Extension {
@@ -93,9 +105,12 @@ class MeetingRecorderIndicator {
     private readonly _providerDisabledItem: PopupMenu.PopupMenuItem;
     private readonly _providerItems = new Map<TranscriptionProvider, PopupMenu.PopupMenuItem>();
     private _notificationSource: MessageTray.Source | null = null;
+    private _captureMonitor: Gio.Subprocess | null = null;
+    private _captureMonitorCancellable: Gio.Cancellable | null = null;
     private _focusedWindow: Meta.Window | null = null;
     private _focusedWindowTitleSignalId: number | null = null;
     private _focusWindowSignalId: number | null = null;
+    private _browserCaptureActive = false;
     private _lastMeetingReminderAt = 0;
     private _recording = false;
     private _lastFile: string | null = null;
@@ -145,6 +160,7 @@ class MeetingRecorderIndicator {
         this._menu.addMenuItem(this._preferencesItem);
 
         this._loadConfig().catch(error => this._notifyError(error));
+        this._startCaptureMonitor();
         this._watchFocusedWindow();
         this._focusWindowSignalId = global.display.connect('notify::focus-window', () => {
             this._watchFocusedWindow();
@@ -157,6 +173,7 @@ class MeetingRecorderIndicator {
             this._focusWindowSignalId = null;
         }
         this._disconnectFocusedWindow();
+        this._stopCaptureMonitor();
         this._notificationSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
         this._notificationSource = null;
         this.button.destroy();
@@ -315,10 +332,13 @@ class MeetingRecorderIndicator {
         const window = this._focusedWindow;
         if (!window)
             return;
+        if (!this._browserCaptureActive)
+            return;
 
         const title = window.get_title();
         const wmClass = window.get_wm_class() ?? '';
-        if (!isMeetingWindow(title, wmClass))
+        const meetingWindow = isRelevantMeetingWindow(title, wmClass);
+        if (!meetingWindow)
             return;
 
         const now = GLib.get_monotonic_time() / 1_000_000;
@@ -350,6 +370,73 @@ class MeetingRecorderIndicator {
             notification.destroy(MessageTray.NotificationDestroyedReason.DISMISSED);
         });
         source.addNotification(notification);
+    }
+
+    private _startCaptureMonitor() {
+        try {
+            this._captureMonitorCancellable = new Gio.Cancellable();
+            this._captureMonitor = Gio.Subprocess.new(
+                [this._extension.backendPath, 'monitor-capture'],
+                Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE
+            );
+
+            const stdout = this._captureMonitor.get_stdout_pipe();
+            if (!stdout)
+                throw new Error('capture monitor started without stdout pipe');
+
+            this._readCaptureMonitorLine(Gio.DataInputStream.new(stdout));
+            this._captureMonitor.wait_check_async(this._captureMonitorCancellable, (_proc, result) => {
+                try {
+                    this._captureMonitor?.wait_check_finish(result);
+                } catch (error) {
+                    if (!this._captureMonitorCancellable?.is_cancelled())
+                        this._notifyError(error);
+                }
+            });
+        } catch (error) {
+            this._notifyError(error);
+        }
+    }
+
+    private _stopCaptureMonitor() {
+        this._captureMonitorCancellable?.cancel();
+        this._captureMonitorCancellable = null;
+        this._captureMonitor?.force_exit();
+        this._captureMonitor = null;
+        this._browserCaptureActive = false;
+    }
+
+    private _readCaptureMonitorLine(stream: Gio.DataInputStream) {
+        const cancellable = this._captureMonitorCancellable;
+        if (!cancellable)
+            return;
+
+        stream.read_line_async(GLib.PRIORITY_DEFAULT, cancellable, (_source, result) => {
+            try {
+                const [line] = stream.read_line_finish_utf8(result);
+                if (line === null)
+                    return;
+
+                this._handleCaptureMonitorLine(line);
+                this._readCaptureMonitorLine(stream);
+            } catch (error) {
+                if (!cancellable.is_cancelled())
+                    this._notifyError(error);
+            }
+        });
+    }
+
+    private _handleCaptureMonitorLine(line: string) {
+        const event = JSON.parse(line) as CaptureStateEvent;
+        if (event.type !== 'capture-state')
+            return;
+
+        const captureActive = Boolean(event.browser_capture);
+        if (this._browserCaptureActive === captureActive)
+            return;
+
+        this._browserCaptureActive = captureActive;
+        this._maybeNotifyMeetingDetected();
     }
 
     private _startRecordingFromReminder() {
@@ -450,9 +537,30 @@ function providerLabel(provider: TranscriptionProvider | null) {
     return TRANSCRIPTION_PROVIDERS.find(candidate => candidate.id === provider)?.label ?? provider;
 }
 
-function isMeetingWindow(title: string, wmClass: string) {
-    const haystack = `${title}\n${wmClass}`.toLocaleLowerCase();
-    return MEETING_WINDOW_PATTERNS.some(pattern => haystack.includes(pattern));
+function isRelevantMeetingWindow(title: string, wmClass: string) {
+    const normalizedTitle = normalizeWindowText(title);
+    const normalizedWindow = normalizeWindowText(`${title}\n${wmClass}`);
+
+    return hasAny(normalizedWindow, CHROME_WINDOW_MARKERS)
+        && (isGoogleMeetWindow(normalizedTitle) || isTeamsWindow(normalizedTitle));
+}
+
+function isGoogleMeetWindow(normalizedTitle: string) {
+    return hasAny(normalizedTitle, GOOGLE_MEET_TITLE_MARKERS)
+        || normalizedTitle.includes(GOOGLE_MEET_URL_MARKER);
+}
+
+function isTeamsWindow(normalizedTitle: string) {
+    return normalizedTitle.includes(TEAMS_TITLE_MARKER)
+        || normalizedTitle.includes(TEAMS_URL_MARKER);
+}
+
+function hasAny(value: string, markers: readonly string[]) {
+    return markers.some(marker => value.includes(marker));
+}
+
+function normalizeWindowText(value: string) {
+    return value.toLocaleLowerCase().replace(/\s+/g, ' ').trim();
 }
 
 export default MeetingRecorderExtension;
