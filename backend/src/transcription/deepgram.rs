@@ -25,6 +25,7 @@ impl TranscriptionProvider for DeepgramProvider {
             ("utterances", "true".to_string()),
             ("diarize_model", "latest".to_string()),
             ("multichannel", request.multichannel.to_string()),
+            ("mip_opt_out", "true".to_string()),
         ];
 
         if let Some(language) = &request.language {
