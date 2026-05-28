@@ -3,15 +3,18 @@ pub mod provider;
 mod xai;
 
 use crate::{auth, config};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use deepgram::DeepgramProvider;
 use provider::{
     default_transcript_path, TranscriptionProvider, TranscriptionRequest, TranscriptionSummary,
 };
 use serde_json::Value;
+use std::env;
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 use xai::XaiProvider;
 
 pub fn transcribe(
@@ -19,7 +22,7 @@ pub fn transcribe(
     audio_file: PathBuf,
     language: Option<String>,
     format: bool,
-    multichannel: bool,
+    _multichannel: bool,
     output: Option<PathBuf>,
 ) -> Result<TranscriptionSummary> {
     let provider_id = auth::normalize_provider(provider)?;
@@ -30,11 +33,16 @@ pub fn transcribe(
         .with_context(|| format!("failed to resolve audio file {}", audio_file.display()))?;
     let transcript_file = output.unwrap_or_else(|| default_transcript_path(&audio_file));
     let api_key = auth::get_api_key(provider.id())?;
+    let downmixed_audio = prepare_transcription_audio(&audio_file)?;
+    let provider_audio_file = downmixed_audio
+        .as_ref()
+        .map(|audio| audio.path.clone())
+        .unwrap_or_else(|| audio_file.clone());
     let request = TranscriptionRequest {
-        audio_file: audio_file.clone(),
+        audio_file: provider_audio_file,
         language,
         format,
-        multichannel,
+        multichannel: false,
     };
 
     let response = provider.transcribe(&request, &api_key)?;
@@ -67,6 +75,95 @@ fn provider_for(provider: &str) -> Box<dyn TranscriptionProvider> {
         "deepgram" => Box::new(DeepgramProvider),
         _ => unreachable!("provider should have been normalized before dispatch"),
     }
+}
+
+struct TempAudio {
+    path: PathBuf,
+}
+
+impl Drop for TempAudio {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn prepare_transcription_audio(audio_file: &Path) -> Result<Option<TempAudio>> {
+    let channels = audio_channel_count(audio_file)?;
+
+    if channels <= 1 {
+        return Ok(None);
+    }
+
+    let output = temp_downmix_path(audio_file);
+    let status = Command::new("ffmpeg")
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(audio_file)
+        .arg("-filter_complex")
+        .arg("pan=mono|c0=0.5*c0+0.5*c1,aformat=channel_layouts=mono")
+        .arg("-ar")
+        .arg("24000")
+        .arg("-ac")
+        .arg("1")
+        .arg("-codec:a")
+        .arg("libmp3lame")
+        .arg("-b:a")
+        .arg("64k")
+        .arg(&output)
+        .status()
+        .context("failed to start ffmpeg for transcription downmix")?;
+
+    if !status.success() {
+        bail!("ffmpeg failed to create transcription downmix");
+    }
+
+    Ok(Some(TempAudio { path: output }))
+}
+
+fn audio_channel_count(audio_file: &Path) -> Result<usize> {
+    let output = Command::new("ffprobe")
+        .arg("-v")
+        .arg("error")
+        .arg("-select_streams")
+        .arg("a:0")
+        .arg("-show_entries")
+        .arg("stream=channels")
+        .arg("-of")
+        .arg("default=nokey=1:noprint_wrappers=1")
+        .arg(audio_file)
+        .output()
+        .context("failed to start ffprobe for transcription input")?;
+
+    if !output.status.success() {
+        bail!("ffprobe failed to inspect transcription input");
+    }
+
+    let channels = String::from_utf8(output.stdout)
+        .context("ffprobe returned non-UTF-8 channel count")?
+        .trim()
+        .parse()
+        .context("ffprobe returned invalid channel count")?;
+
+    Ok(channels)
+}
+
+fn temp_downmix_path(audio_file: &Path) -> PathBuf {
+    let stem = audio_file
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .unwrap_or("audio");
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+
+    env::temp_dir().join(format!(
+        "meeting-recorder-{stem}-{}-{nonce}.downmix.mp3",
+        std::process::id()
+    ))
 }
 
 fn write_transcript(path: &PathBuf, response: &Value) -> Result<()> {
@@ -127,13 +224,17 @@ fn render_markdown(response: &Value) -> String {
     let mut markdown = String::new();
     markdown.push_str("# Transcript\n\n");
 
-    if let Some(text) = response.get("text").and_then(Value::as_str) {
-        markdown.push_str(text.trim());
-        markdown.push('\n');
-    } else if let Some(turns) = deepgram_utterance_turns(response) {
+    if let Some(turns) = deepgram_utterance_turns(response) {
         for turn in turns {
             let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
         }
+    } else if let Some(turns) = xai_diarized_turns(response) {
+        for turn in turns {
+            let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
+        }
+    } else if let Some(text) = response.get("text").and_then(Value::as_str) {
+        markdown.push_str(text.trim());
+        markdown.push('\n');
     } else if let Some(turns) = transcript_turns(response) {
         for turn in turns {
             let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
@@ -306,8 +407,30 @@ fn transcript_turns(response: &Value) -> Option<Vec<Turn>> {
     let channels = response
         .get("channels")
         .or_else(|| response.pointer("/results/channels"))?;
-    let mut words = channel_words(channels);
+    words_to_turns(channel_words(channels))
+}
 
+fn xai_diarized_turns(response: &Value) -> Option<Vec<Turn>> {
+    let words = response.get("words")?.as_array()?;
+    let mut diarized_words = Vec::new();
+
+    for word in words {
+        let speaker = word.get("speaker")?.as_u64()?;
+        diarized_words.push(Word {
+            speaker: format!("Speaker {}", speaker + 1),
+            start: word.get("start")?.as_f64()?,
+            end: word
+                .get("end")
+                .and_then(Value::as_f64)
+                .unwrap_or_else(|| word.get("start").and_then(Value::as_f64).unwrap_or(0.0)),
+            text: word.get("text")?.as_str()?.to_string(),
+        });
+    }
+
+    words_to_turns(diarized_words)
+}
+
+fn words_to_turns(mut words: Vec<Word>) -> Option<Vec<Turn>> {
     if words.is_empty() {
         return None;
     }

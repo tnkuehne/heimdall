@@ -167,8 +167,10 @@ impl PipeWireGraph {
         let active_video_capture_nodes = self.active_browser_capture_nodes("video");
 
         CaptureState {
-            browser_audio_capture: self.has_active_capture_link(&active_audio_capture_nodes, "audio"),
-            browser_video_capture: self.has_active_capture_link(&active_video_capture_nodes, "video"),
+            browser_audio_capture: self
+                .has_active_capture_link(&active_audio_capture_nodes, "audio"),
+            browser_video_capture: self
+                .has_active_capture_link(&active_video_capture_nodes, "video"),
         }
     }
 
@@ -192,7 +194,9 @@ impl PipeWireGraph {
 
     fn has_active_capture_link(&self, capture_nodes: &HashSet<u64>, media_kind: &str) -> bool {
         self.links.values().any(|link| {
-            if link.state.as_deref() != Some("active") || !capture_nodes.contains(&link.input_node_id) {
+            if link.state.as_deref() != Some("active")
+                || !capture_nodes.contains(&link.input_node_id)
+            {
                 return false;
             }
 
@@ -233,9 +237,9 @@ fn main() -> Result<()> {
             ConfigCommand::SetProvider { provider } => {
                 print_json(&config::set_transcription_provider(&provider)?)
             }
-            ConfigCommand::SetMeetingDetectionReminder { enabled } => {
-                print_json(&config::set_meeting_detection_reminder(parse_bool(&enabled)?)?)
-            }
+            ConfigCommand::SetMeetingDetectionReminder { enabled } => print_json(
+                &config::set_meeting_detection_reminder(parse_bool(&enabled)?)?,
+            ),
             ConfigCommand::SetRecordingsDir { path } => {
                 print_json(&config::set_recordings_dir(&path)?)
             }
@@ -468,12 +472,15 @@ fn monitor_capture() -> Result<()> {
 
         let state = graph.capture_state();
         if last_state != Some(state) {
-            serde_json::to_writer(&mut stdout, &serde_json::json!({
-                "type": "capture-state",
-                "browser_audio_capture": state.browser_audio_capture,
-                "browser_video_capture": state.browser_video_capture,
-                "browser_capture": state.browser_audio_capture || state.browser_video_capture,
-            }))?;
+            serde_json::to_writer(
+                &mut stdout,
+                &serde_json::json!({
+                    "type": "capture-state",
+                    "browser_audio_capture": state.browser_audio_capture,
+                    "browser_video_capture": state.browser_video_capture,
+                    "browser_capture": state.browser_audio_capture || state.browser_video_capture,
+                }),
+            )?;
             stdout.write_all(b"\n")?;
             stdout.flush()?;
             last_state = Some(state);
