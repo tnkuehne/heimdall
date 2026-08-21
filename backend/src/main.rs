@@ -71,6 +71,8 @@ enum AuthCommand {
 enum ConfigCommand {
     Get,
     SetProvider { provider: String },
+    SetProviderBaseUrl { provider: String, base_url: String },
+    ResetProviderBaseUrl { provider: String },
     SetMeetingDetectionReminder { enabled: String },
     SetRecordingsDir { path: PathBuf },
     ResetRecordingsDir,
@@ -236,6 +238,12 @@ fn main() -> Result<()> {
             ConfigCommand::Get => print_json(&config::get()?),
             ConfigCommand::SetProvider { provider } => {
                 print_json(&config::set_transcription_provider(&provider)?)
+            }
+            ConfigCommand::SetProviderBaseUrl { provider, base_url } => {
+                print_json(&config::set_provider_base_url(&provider, &base_url)?)
+            }
+            ConfigCommand::ResetProviderBaseUrl { provider } => {
+                print_json(&config::reset_provider_base_url(&provider)?)
             }
             ConfigCommand::SetMeetingDetectionReminder { enabled } => print_json(
                 &config::set_meeting_detection_reminder(parse_bool(&enabled)?)?,

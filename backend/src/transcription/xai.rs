@@ -1,4 +1,4 @@
-use crate::transcription::provider::{TranscriptionProvider, TranscriptionRequest};
+use crate::transcription::provider::{endpoint_url, TranscriptionProvider, TranscriptionRequest};
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::multipart::{Form, Part};
 use secrecy::{ExposeSecret, SecretString};
@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::path::Path;
 use std::time::Duration;
 
-const STT_ENDPOINT: &str = "https://api.x.ai/v1/stt";
+const DEFAULT_BASE_URL: &str = "https://api.x.ai";
 
 pub struct XaiProvider;
 
@@ -15,7 +15,16 @@ impl TranscriptionProvider for XaiProvider {
         "xai"
     }
 
-    fn transcribe(&self, request: &TranscriptionRequest, api_key: &SecretString) -> Result<Value> {
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_BASE_URL
+    }
+
+    fn transcribe(
+        &self,
+        request: &TranscriptionRequest,
+        base_url: &str,
+        api_key: Option<&SecretString>,
+    ) -> Result<Value> {
         let mut form = Form::new()
             .text("diarize", "true")
             .text("multichannel", request.multichannel.to_string());
@@ -36,13 +45,18 @@ impl TranscriptionProvider for XaiProvider {
         let file_part = audio_file_part(&request.audio_file)?;
         form = form.part("file", file_part);
 
-        let response = reqwest::blocking::Client::builder()
+        let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30 * 60))
             .build()
-            .context("failed to build xAI HTTP client")?
-            .post(STT_ENDPOINT)
-            .bearer_auth(api_key.expose_secret())
-            .multipart(form)
+            .context("failed to build xAI HTTP client")?;
+        let mut request_builder = client
+            .post(endpoint_url(base_url, "v1/stt")?)
+            .multipart(form);
+        if let Some(api_key) = api_key {
+            request_builder = request_builder.bearer_auth(api_key.expose_secret());
+        }
+
+        let response = request_builder
             .send()
             .context("failed to send xAI transcription request")?;
 

@@ -32,7 +32,23 @@ pub fn transcribe(
         .canonicalize()
         .with_context(|| format!("failed to resolve audio file {}", audio_file.display()))?;
     let transcript_file = output.unwrap_or_else(|| default_transcript_path(&audio_file));
-    let api_key = auth::get_api_key(provider.id())?;
+    let custom_base_url = config::provider_base_url(provider.id())?;
+    let base_url = custom_base_url
+        .as_deref()
+        .unwrap_or_else(|| provider.default_base_url());
+    let api_key = match auth::get_api_key_if_configured(provider.id()) {
+        Ok(api_key) => api_key,
+        // Custom gateways may provide credentials, so keyring availability cannot be required.
+        Err(_) if custom_base_url.is_some() => None,
+        Err(error) => return Err(error),
+    };
+    if custom_base_url.is_none() && api_key.is_none() {
+        bail!(
+            "no {} API key configured; run `meeting-recorder auth set {}` or configure a custom base URL",
+            provider.id(),
+            provider.id()
+        );
+    }
     let downmixed_audio = prepare_transcription_audio(&audio_file)?;
     let provider_audio_file = downmixed_audio
         .as_ref()
@@ -45,7 +61,7 @@ pub fn transcribe(
         multichannel: false,
     };
 
-    let response = provider.transcribe(&request, &api_key)?;
+    let response = provider.transcribe(&request, base_url, api_key.as_ref())?;
     write_transcript(&transcript_file, &response)?;
     let duration = transcript_duration(&response);
     let channels = transcript_channels(&response);

@@ -112,6 +112,24 @@ Configure a provider from the extension menu:
 - Choose the transcription provider.
 - Enter the provider API key in its password row and apply it.
 
+Each provider also has a configurable Base URL. The defaults are `https://api.x.ai` for xAI and
+`https://api.deepgram.com` for Deepgram. Heimdall appends the provider-specific API path. A custom
+gateway can therefore be configured with, for example:
+
+```bash
+meeting-recorder config set-provider-base-url xai https://ai.example.com/grok
+```
+
+Reset it to the provider default with:
+
+```bash
+meeting-recorder config reset-provider-base-url xai
+```
+
+For provider defaults, a key in GNOME Keyring is required. Custom Base URLs may supply credentials
+themselves, so Heimdall allows requests without a local key. If a local key is configured, Heimdall
+continues to send it using the provider's normal authentication header.
+
 The CLI can also configure keys:
 
 ```sh

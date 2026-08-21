@@ -1,6 +1,7 @@
 use crate::auth;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -11,6 +12,8 @@ const CONFIG_FILE_NAME: &str = "config.json";
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub transcription_provider: Option<String>,
+    #[serde(default)]
+    pub provider_base_urls: BTreeMap<String, String>,
     #[serde(default = "default_meeting_detection_reminder_enabled")]
     pub meeting_detection_reminder_enabled: bool,
     #[serde(default = "default_recordings_dir_unchecked")]
@@ -22,6 +25,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             transcription_provider: None,
+            provider_base_urls: BTreeMap::new(),
             meeting_detection_reminder_enabled: default_meeting_detection_reminder_enabled(),
             recordings_dir: default_recordings_dir_unchecked(),
             post_transcribe_hook: None,
@@ -38,6 +42,30 @@ pub fn set_transcription_provider(provider: &str) -> Result<Config> {
     config.transcription_provider = normalize_optional_provider(provider)?.map(ToOwned::to_owned);
     write_config(&config)?;
     Ok(config)
+}
+
+pub fn set_provider_base_url(provider: &str, base_url: &str) -> Result<Config> {
+    let provider = auth::normalize_provider(provider)?;
+    let base_url = normalize_base_url(base_url)?;
+    let mut config = read_config()?;
+    config
+        .provider_base_urls
+        .insert(provider.to_owned(), base_url);
+    write_config(&config)?;
+    Ok(config)
+}
+
+pub fn reset_provider_base_url(provider: &str) -> Result<Config> {
+    let provider = auth::normalize_provider(provider)?;
+    let mut config = read_config()?;
+    config.provider_base_urls.remove(provider);
+    write_config(&config)?;
+    Ok(config)
+}
+
+pub fn provider_base_url(provider: &str) -> Result<Option<String>> {
+    let provider = auth::normalize_provider(provider)?;
+    Ok(read_config()?.provider_base_urls.get(provider).cloned())
 }
 
 pub fn set_recordings_dir(path: &Path) -> Result<Config> {
@@ -126,6 +154,26 @@ fn normalize_optional_provider(provider: &str) -> Result<Option<&'static str>> {
         "none" | "disabled" | "off" => Ok(None),
         value => Ok(Some(auth::normalize_provider(value)?)),
     }
+}
+
+fn normalize_base_url(base_url: &str) -> Result<String> {
+    let base_url = base_url.trim().trim_end_matches('/');
+    let parsed = url::Url::parse(base_url).context("base URL is not a valid URL")?;
+
+    if !matches!(parsed.scheme(), "http" | "https") {
+        bail!("base URL must use http or https");
+    }
+    if parsed.host_str().is_none() {
+        bail!("base URL must include a host");
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        bail!("base URL must not contain credentials");
+    }
+    if parsed.query().is_some() || parsed.fragment().is_some() {
+        bail!("base URL must not contain a query or fragment");
+    }
+
+    Ok(base_url.to_owned())
 }
 
 fn read_config() -> Result<Config> {
