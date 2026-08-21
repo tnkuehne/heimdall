@@ -68,13 +68,16 @@ pub fn delete_api_key(provider: &str) -> Result<AuthStatus> {
     }
 }
 
-pub fn get_api_key(provider: &str) -> Result<SecretString> {
+pub fn get_api_key_if_configured(provider: &str) -> Result<Option<SecretString>> {
     let provider = normalize_provider(provider)?;
-    let password = entry(provider)?.get_password().with_context(|| {
-        format!("no {provider} API key configured; run `meeting-recorder auth set {provider}`")
-    })?;
 
-    Ok(password.into())
+    match entry(provider)?.get_password() {
+        Ok(password) if password.is_empty() => Ok(None),
+        Ok(password) => Ok(Some(password.into())),
+        Err(KeyringError::NoEntry) => Ok(None),
+        Err(error) => Err(error)
+            .with_context(|| format!("failed to read {provider} API key from GNOME Keyring")),
+    }
 }
 
 pub fn normalize_provider(provider: &str) -> Result<&'static str> {

@@ -3,6 +3,7 @@ use secrecy::SecretString;
 use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use url::Url;
 
 #[derive(Debug)]
 pub struct TranscriptionRequest {
@@ -25,7 +26,22 @@ pub struct TranscriptionSummary {
 
 pub trait TranscriptionProvider {
     fn id(&self) -> &'static str;
-    fn transcribe(&self, request: &TranscriptionRequest, api_key: &SecretString) -> Result<Value>;
+    fn default_base_url(&self) -> &'static str;
+    fn transcribe(
+        &self,
+        request: &TranscriptionRequest,
+        base_url: &str,
+        api_key: Option<&SecretString>,
+    ) -> Result<Value>;
+}
+
+pub fn endpoint_url(base_url: &str, path: &str) -> Result<Url> {
+    Url::parse(&format!(
+        "{}/{}",
+        base_url.trim_end_matches('/'),
+        path.trim_start_matches('/')
+    ))
+    .map_err(Into::into)
 }
 
 pub fn default_transcript_path(audio_file: &Path) -> PathBuf {

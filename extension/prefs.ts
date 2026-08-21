@@ -6,8 +6,8 @@ import Gtk from 'gi://Gtk';
 import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
 const TRANSCRIPTION_PROVIDERS = [
-    {id: 'xai', label: 'xAI'},
-    {id: 'deepgram', label: 'Deepgram'},
+    {id: 'xai', label: 'xAI', defaultBaseUrl: 'https://api.x.ai'},
+    {id: 'deepgram', label: 'Deepgram', defaultBaseUrl: 'https://api.deepgram.com'},
 ] as const;
 
 const PROVIDER_OPTIONS: Array<TranscriptionProvider | null> = [
@@ -19,6 +19,7 @@ type TranscriptionProvider = typeof TRANSCRIPTION_PROVIDERS[number]['id'];
 
 type BackendConfig = {
     transcription_provider: TranscriptionProvider | null;
+    provider_base_urls: Partial<Record<TranscriptionProvider, string>>;
     meeting_detection_reminder_enabled: boolean;
     recordings_dir: string;
     post_transcribe_hook: string | null;
@@ -29,8 +30,10 @@ type AuthStatus = {
     configured: boolean;
 };
 
-type ProviderKeyWidgets = {
+type ProviderWidgets = {
     group: Adw.PreferencesGroup;
+    baseUrlRow: Adw.EntryRow;
+    resetBaseUrlButton: Gtk.Button;
     row: Adw.PasswordEntryRow;
     removeButton: Gtk.Button;
 };
@@ -43,6 +46,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
     private _resetRecordingsDirButton: Gtk.Button | null = null;
     private _postTranscribeHookRow: Adw.ActionRow | null = null;
     private _clearPostTranscribeHookButton: Gtk.Button | null = null;
+    private readonly _providerWidgets = new Map<TranscriptionProvider, ProviderWidgets>();
     private _loadingProvider = false;
     private _loadingMeetingDetectionReminder = false;
 
@@ -148,18 +152,37 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
         this._clearPostTranscribeHookButton = clearPostTranscribeHookButton;
 
         const keysGroup = new Adw.PreferencesGroup({
-            title: 'API Keys',
+            title: 'Transcription Providers',
             description: 'Keys are stored in GNOME Keyring.',
         });
         page.add(keysGroup);
 
-        const keyWidgets = new Map<TranscriptionProvider, ProviderKeyWidgets>();
         for (const provider of TRANSCRIPTION_PROVIDERS) {
             const providerGroup = new Adw.PreferencesGroup({
                 title: provider.label,
                 description: 'Checking key status...',
             });
             page.add(providerGroup);
+
+            const baseUrlRow = new Adw.EntryRow({
+                title: 'Base URL',
+                show_apply_button: true,
+            });
+            baseUrlRow.set_text(provider.defaultBaseUrl);
+            baseUrlRow.connect('apply', () => {
+                this._saveProviderBaseUrl(provider.id, baseUrlRow, window);
+            });
+
+            const resetBaseUrlButton = new Gtk.Button({
+                label: 'Reset',
+                valign: Gtk.Align.CENTER,
+                visible: false,
+            });
+            resetBaseUrlButton.connect('clicked', () => {
+                this._resetProviderBaseUrl(provider.id, window);
+            });
+            baseUrlRow.add_suffix(resetBaseUrlButton);
+            providerGroup.add(baseUrlRow);
 
             const row = new Adw.PasswordEntryRow({
                 title: 'API key',
@@ -181,23 +204,26 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
             row.add_suffix(removeButton);
             providerGroup.add(row);
 
-            keyWidgets.set(provider.id, {group: providerGroup, row, removeButton});
+            this._providerWidgets.set(provider.id, {
+                group: providerGroup,
+                baseUrlRow,
+                resetBaseUrlButton,
+                row,
+                removeButton,
+            });
         }
 
         window.add(page);
-        this._load(window, keyWidgets);
+        this._load(window);
     }
 
-    private _load(
-        window: Adw.PreferencesWindow,
-        keyWidgets: Map<TranscriptionProvider, ProviderKeyWidgets>
-    ) {
+    private _load(window: Adw.PreferencesWindow) {
         this._runBackend<BackendConfig>(['config', 'get'])
             .then(config => this._applyConfig(config))
             .catch(error => this._showError(window, error));
 
         for (const provider of TRANSCRIPTION_PROVIDERS) {
-            const widgets = keyWidgets.get(provider.id);
+            const widgets = this._providerWidgets.get(provider.id);
             if (!widgets)
                 continue;
 
@@ -218,9 +244,22 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 
     private _applyConfig(config: BackendConfig) {
         this._applyProvider(config.transcription_provider);
+        this._applyProviderBaseUrls(config.provider_base_urls);
         this._applyMeetingDetectionReminder(config.meeting_detection_reminder_enabled);
         this._applyRecordingsDir(config.recordings_dir);
         this._applyPostTranscribeHook(config.post_transcribe_hook);
+    }
+
+    private _applyProviderBaseUrls(baseUrls: Partial<Record<TranscriptionProvider, string>>) {
+        for (const provider of TRANSCRIPTION_PROVIDERS) {
+            const widgets = this._providerWidgets.get(provider.id);
+            if (!widgets)
+                continue;
+
+            const customBaseUrl = baseUrls[provider.id];
+            widgets.baseUrlRow.set_text(customBaseUrl ?? provider.defaultBaseUrl);
+            widgets.resetBaseUrlButton.set_visible(customBaseUrl !== undefined);
+        }
     }
 
     private _applyMeetingDetectionReminder(enabled: boolean) {
@@ -257,6 +296,34 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
             .then(config => {
                 this._applyConfig(config);
                 this._toast(window, `Transcription provider: ${providerLabel(config.transcription_provider)}`);
+            })
+            .catch(error => this._showError(window, error));
+    }
+
+    private _saveProviderBaseUrl(
+        provider: TranscriptionProvider,
+        row: Adw.EntryRow,
+        window: Adw.PreferencesWindow
+    ) {
+        const baseUrl = row.get_text().trim();
+        if (baseUrl.length === 0) {
+            this._toast(window, 'Base URL cannot be empty');
+            return;
+        }
+
+        this._runBackend<BackendConfig>(['config', 'set-provider-base-url', provider, baseUrl])
+            .then(config => {
+                this._applyConfig(config);
+                this._toast(window, `${providerLabel(provider)} Base URL updated`);
+            })
+            .catch(error => this._showError(window, error));
+    }
+
+    private _resetProviderBaseUrl(provider: TranscriptionProvider, window: Adw.PreferencesWindow) {
+        this._runBackend<BackendConfig>(['config', 'reset-provider-base-url', provider])
+            .then(config => {
+                this._applyConfig(config);
+                this._toast(window, `${providerLabel(provider)} Base URL reset`);
             })
             .catch(error => this._showError(window, error));
     }

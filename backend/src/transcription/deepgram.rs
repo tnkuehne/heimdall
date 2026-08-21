@@ -1,11 +1,11 @@
-use crate::transcription::provider::{TranscriptionProvider, TranscriptionRequest};
+use crate::transcription::provider::{endpoint_url, TranscriptionProvider, TranscriptionRequest};
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
-const LISTEN_ENDPOINT: &str = "https://api.deepgram.com/v1/listen";
+const DEFAULT_BASE_URL: &str = "https://api.deepgram.com";
 
 pub struct DeepgramProvider;
 
@@ -14,7 +14,16 @@ impl TranscriptionProvider for DeepgramProvider {
         "deepgram"
     }
 
-    fn transcribe(&self, request: &TranscriptionRequest, api_key: &SecretString) -> Result<Value> {
+    fn default_base_url(&self) -> &'static str {
+        DEFAULT_BASE_URL
+    }
+
+    fn transcribe(
+        &self,
+        request: &TranscriptionRequest,
+        base_url: &str,
+        api_key: Option<&SecretString>,
+    ) -> Result<Value> {
         let audio = std::fs::read(&request.audio_file)
             .with_context(|| format!("failed to read {}", request.audio_file.display()))?;
 
@@ -34,12 +43,17 @@ impl TranscriptionProvider for DeepgramProvider {
             query.push(("detect_language", "true".to_string()));
         }
 
-        let response = Client::new()
-            .post(LISTEN_ENDPOINT)
+        let mut request_builder = Client::new()
+            .post(endpoint_url(base_url, "v1/listen")?)
             .query(&query)
-            .header(AUTHORIZATION, format!("Token {}", api_key.expose_secret()))
             .header(CONTENT_TYPE, "audio/mpeg")
-            .body(audio)
+            .body(audio);
+        if let Some(api_key) = api_key {
+            request_builder =
+                request_builder.header(AUTHORIZATION, format!("Token {}", api_key.expose_secret()));
+        }
+
+        let response = request_builder
             .send()
             .context("failed to send Deepgram transcription request")?;
 
