@@ -2,6 +2,7 @@ import St from 'gi://St';
 import Gio from 'gi://Gio';
 import GLib from 'gi://GLib';
 import Meta from 'gi://Meta';
+import Shell from 'gi://Shell';
 
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -18,10 +19,10 @@ const GOOGLE_MEET_TITLE_MARKERS = [
 const GOOGLE_MEET_URL_MARKER = 'meet.google.com';
 const TEAMS_TITLE_MARKER = 'microsoft teams';
 const TEAMS_URL_MARKER = 'teams.microsoft.com';
-const CHROME_WINDOW_MARKERS = [
-    'google chrome',
-    'google-chrome',
-] as const;
+const CHROME_APP_ID = 'google-chrome.desktop';
+const CHROME_PWA_APP_ID_PREFIX = 'chrome-';
+const FLATPAK_CHROME_APP_ID_PREFIX = 'com.google.chrome';
+const DESKTOP_APP_ID_SUFFIX = '.desktop';
 
 const TRANSCRIPTION_PROVIDERS = [
     {id: 'xai', label: 'xAI'},
@@ -342,8 +343,8 @@ class MeetingRecorderIndicator {
             return;
 
         const title = window.get_title();
-        const wmClass = window.get_wm_class() ?? '';
-        const meetingWindow = isRelevantMeetingWindow(title, wmClass);
+        const appId = Shell.WindowTracker.get_default().get_window_app(window)?.get_id() ?? '';
+        const meetingWindow = isRelevantMeetingWindow(title, appId);
         if (!meetingWindow)
             return;
 
@@ -543,12 +544,22 @@ function providerLabel(provider: TranscriptionProvider | null) {
     return TRANSCRIPTION_PROVIDERS.find(candidate => candidate.id === provider)?.label ?? provider;
 }
 
-function isRelevantMeetingWindow(title: string, wmClass: string) {
+function isRelevantMeetingWindow(title: string, appId: string) {
     const normalizedTitle = normalizeWindowText(title);
-    const normalizedWindow = normalizeWindowText(`${title}\n${wmClass}`);
 
-    return hasAny(normalizedWindow, CHROME_WINDOW_MARKERS)
+    return isChromeApplication(appId)
         && (isGoogleMeetWindow(normalizedTitle) || isTeamsWindow(normalizedTitle));
+}
+
+function isChromeApplication(appId: string) {
+    const normalizedAppId = normalizeWindowText(appId);
+    if (!normalizedAppId.endsWith(DESKTOP_APP_ID_SUFFIX))
+        return false;
+
+    return normalizedAppId === CHROME_APP_ID
+        || normalizedAppId.startsWith(CHROME_PWA_APP_ID_PREFIX)
+        || normalizedAppId.startsWith(`${FLATPAK_CHROME_APP_ID_PREFIX}.`)
+        || normalizedAppId.startsWith(`${FLATPAK_CHROME_APP_ID_PREFIX}-`);
 }
 
 function isGoogleMeetWindow(normalizedTitle: string) {
