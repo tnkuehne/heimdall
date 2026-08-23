@@ -14,16 +14,13 @@ need() {
 
 need apt-get
 need curl
+need dpkg
 
-case "$(uname -m)" in
-  x86_64 | amd64)
-    architecture="amd64"
-    ;;
-  *)
-    echo "Meeting Recorder currently supports only amd64 systems." >&2
-    exit 1
-    ;;
-esac
+architecture="$(dpkg --print-architecture)"
+if [ "${architecture}" != "amd64" ]; then
+  echo "Meeting Recorder currently supports only amd64 systems." >&2
+  exit 1
+fi
 
 latest_url="$(curl --fail --silent --show-error --location \
   --output /dev/null \
