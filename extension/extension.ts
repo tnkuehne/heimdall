@@ -21,6 +21,7 @@ const TEAMS_TITLE_MARKER = 'microsoft teams';
 const TEAMS_URL_MARKER = 'teams.microsoft.com';
 const CHROME_APP_ID = 'google-chrome.desktop';
 const CHROME_PWA_APP_ID_PREFIX = 'chrome-';
+const FLATPAK_CHROME_APP_ID_PREFIX = 'com.google.chrome';
 const DESKTOP_APP_ID_SUFFIX = '.desktop';
 
 const TRANSCRIPTION_PROVIDERS = [
@@ -552,10 +553,13 @@ function isRelevantMeetingWindow(title: string, appId: string) {
 
 function isChromeApplication(appId: string) {
     const normalizedAppId = normalizeWindowText(appId);
+    if (!normalizedAppId.endsWith(DESKTOP_APP_ID_SUFFIX))
+        return false;
 
     return normalizedAppId === CHROME_APP_ID
-        || (normalizedAppId.startsWith(CHROME_PWA_APP_ID_PREFIX)
-            && normalizedAppId.endsWith(DESKTOP_APP_ID_SUFFIX));
+        || normalizedAppId.startsWith(CHROME_PWA_APP_ID_PREFIX)
+        || normalizedAppId.startsWith(`${FLATPAK_CHROME_APP_ID_PREFIX}.`)
+        || normalizedAppId.startsWith(`${FLATPAK_CHROME_APP_ID_PREFIX}-`);
 }
 
 function isGoogleMeetWindow(normalizedTitle: string) {
