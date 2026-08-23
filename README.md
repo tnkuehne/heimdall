@@ -28,10 +28,17 @@ After installing `rustup`, restart the shell or run `source "$HOME/.cargo/env"` 
 
 ## Install From Deb
 
-Install a release package:
+Download and install the latest release:
 
 ```sh
-sudo apt install ./meeting-recorder_0.1.0_amd64.deb
+curl -fsSL https://raw.githubusercontent.com/tnkuehne/heimdall/main/scripts/install.sh | bash
+```
+
+Alternatively, download the versioned `.deb` from the
+[latest GitHub release](https://github.com/tnkuehne/heimdall/releases/latest) and install it manually:
+
+```sh
+sudo apt install ./meeting-recorder_*_amd64.deb
 gnome-extensions enable meeting-recorder@timokuehne.com
 ```
 
@@ -212,7 +219,7 @@ Build a Debian package with:
 The package is written to:
 
 ```text
-build/deb/meeting-recorder_0.1.0_amd64.deb
+build/deb/meeting-recorder_<version>_<architecture>.deb
 ```
 
-GitHub Actions builds and uploads the `.deb` automatically when a tag like `v0.1.0` is pushed.
+GitHub Actions builds the `.deb` on every push to `main`. A version change creates a draft release, and publishing its tag uploads the package to that release.
