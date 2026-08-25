@@ -14,6 +14,7 @@
   },
   "devDependencies": {
     "@girs/gnome-shell": "46.0.2",
+    "@oxlint/plugins": "1.80.0",
     "@tsconfig/strictest": "^2.0.8",
     "oxfmt": "0.65.0",
     "oxlint": "1.80.0",
