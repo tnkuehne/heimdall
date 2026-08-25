@@ -34,6 +34,10 @@ Download and install the latest release:
 curl -fsSL https://raw.githubusercontent.com/tnkuehne/heimdall/main/scripts/install.sh | bash
 ```
 
+The installer enables the extension in the current user's GNOME settings and warns if GNOME user
+extensions are globally disabled. Log out and back in once after installation so GNOME Shell loads
+it.
+
 Alternatively, download the versioned `.deb` from the
 [latest GitHub release](https://github.com/tnkuehne/heimdall/releases/latest) and install it manually:
 
