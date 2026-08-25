@@ -24,6 +24,7 @@ enable_extension_for_current_user() {
   local schema="org.gnome.shell"
   local enabled_extensions
   local disabled_extensions
+  local user_extensions_disabled
   local updated_extensions
 
   if [ "$(id -u)" -eq 0 ]; then
@@ -71,6 +72,20 @@ enable_extension_for_current_user() {
     echo "Cannot enable the GNOME extension automatically: GSettings did not save the changes." >&2
     return 1
   fi
+
+  user_extensions_disabled="$(gsettings get "${schema}" disable-user-extensions)" || return 1
+  case "${user_extensions_disabled}" in
+    false)
+      return 0
+      ;;
+    true)
+      return 2
+      ;;
+    *)
+      echo "Cannot determine whether GNOME user extensions are globally disabled." >&2
+      return 1
+      ;;
+  esac
 }
 
 need apt-get
@@ -123,6 +138,16 @@ case "${enable_status}" in
 Meeting Recorder is installed and enabled for your user.
 
 Log out and back in to make GNOME Shell load the extension.
+EOF
+    ;;
+  2)
+    cat <<'EOF'
+Meeting Recorder is installed and configured, but GNOME user extensions are globally disabled.
+
+Enable user extensions in the Extensions app or run:
+  gsettings set org.gnome.shell disable-user-extensions false
+
+Then log out and back in to make GNOME Shell load the extension.
 EOF
     ;;
   *)
