@@ -5,11 +5,18 @@
   "type": "module",
   "scripts": {
     "build": "tsc --project tsconfig.json && cp extension/metadata.json build/extension/metadata.json",
-    "check": "tsc --project tsconfig.json --noEmit"
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck",
+    "format": "oxfmt extension",
+    "format:check": "oxfmt --check extension",
+    "lint": "oxlint --deny-warnings extension",
+    "lint:fix": "oxlint --fix extension",
+    "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "devDependencies": {
     "@girs/gnome-shell": "46.0.2",
     "@tsconfig/strictest": "^2.0.8",
+    "oxfmt": "0.65.0",
+    "oxlint": "1.80.0",
     "typescript": "^5.8.3"
   },
   "packageManager": "pnpm@11.1.3"
