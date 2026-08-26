@@ -1,6 +1,7 @@
-name: Release
+name: Validate and Release
 
 on:
+  pull_request:
   push:
     branches:
       - main
@@ -9,12 +10,23 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build-deb:
-    name: Build Debian package
+  validate:
+    name: Validate and build Debian package
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      package-file: ${{ steps.package.outputs.file }}
+      package-tag: ${{ steps.package.outputs.tag }}
+      package-version: ${{ steps.package.outputs.version }}
+      version-changed: ${{ steps.version-change.outputs.changed }}
 
     steps:
       - name: Checkout
@@ -64,9 +76,9 @@ jobs:
           fi
           deb_path="build/deb/meeting-recorder_${package_version}_amd64.deb"
           test -f "${deb_path}"
+          echo "file=$(basename "${deb_path}")" >>"${GITHUB_OUTPUT}"
           echo "version=${package_version}" >>"${GITHUB_OUTPUT}"
           echo "tag=v${package_version}" >>"${GITHUB_OUTPUT}"
-          echo "deb_path=${deb_path}" >>"${GITHUB_OUTPUT}"
 
       - name: Check tag matches package version
         if: startsWith(github.ref, 'refs/tags/')
@@ -105,13 +117,28 @@ jobs:
           path: build/deb/*.deb
           if-no-files-found: error
 
+  release:
+    name: Publish release
+    if: github.event_name != 'pull_request'
+    needs: validate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download package artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: meeting-recorder-deb
+          path: build/deb
+
       - name: Create draft GitHub release
-        if: github.ref == 'refs/heads/main' && steps.version-change.outputs.changed == 'true'
+        if: github.ref == 'refs/heads/main' && needs.validate.outputs.version-changed == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.package.outputs.tag }}
-          RELEASE_VERSION: ${{ steps.package.outputs.version }}
-          DEB_PATH: ${{ steps.package.outputs.deb_path }}
+          RELEASE_TAG: ${{ needs.validate.outputs.package-tag }}
+          RELEASE_VERSION: ${{ needs.validate.outputs.package-version }}
+          DEB_PATH: build/deb/${{ needs.validate.outputs.package-file }}
         run: |
           if gh release view "${RELEASE_TAG}" >/dev/null 2>&1; then
             echo "Release ${RELEASE_TAG} already exists; skipping draft release creation."
