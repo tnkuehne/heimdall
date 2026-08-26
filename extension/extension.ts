@@ -68,12 +68,12 @@ class MeetingRecorderExtension extends Extension {
 		this._indicator = new MeetingRecorderIndicator(this);
 		Main.panel.addToStatusArea(this.uuid, this._indicator.button);
 
-		this._indicator.refresh();
+		void this._indicator.refresh();
 		this._timeoutId = GLib.timeout_add_seconds(
 			GLib.PRIORITY_DEFAULT,
 			STATUS_INTERVAL_SECONDS,
 			() => {
-				this._indicator?.refresh();
+				void this._indicator?.refresh();
 				return GLib.SOURCE_CONTINUE;
 			},
 		);
@@ -442,7 +442,7 @@ class MeetingRecorderIndicator {
 	}
 
 	private _startRecordingFromReminder() {
-		if (!this._recording) this._toggleRecording();
+		if (!this._recording) void this._toggleRecording();
 	}
 
 	private _notifyRecordingSaved(file: string) {
