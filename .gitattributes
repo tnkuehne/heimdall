@@ -2,3 +2,5 @@
 contracts/backend.fixtures.json linguist-generated=true
 contracts/backend.schema.json linguist-generated=true
 extension/generated/** linguist-generated=true
+# Exclude vendored lint rules from GitHub language statistics.
+tools/lint-rules/** -linguist-detectable
