@@ -1,0 +1,4 @@
+# Keep generated contracts versioned while collapsing their diffs on GitHub.
+contracts/backend.fixtures.json linguist-generated=true
+contracts/backend.schema.json linguist-generated=true
+extension/generated/** linguist-generated=true
