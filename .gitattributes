@@ -1,0 +1,2 @@
+# Exclude vendored lint rules from GitHub language statistics.
+tools/lint-rules/** -linguist-detectable
