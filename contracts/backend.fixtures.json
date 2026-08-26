@@ -1,0 +1,46 @@
+{
+  "recording_status": {
+    "recording": true,
+    "pid": 4242,
+    "file": "/tmp/meeting.mp3",
+    "partial_file": "/tmp/meeting.part.mp3",
+    "started_at": "2026-08-26T12:00:00+02:00",
+    "message": null
+  },
+  "extension_config": {
+    "transcription_provider": "xai",
+    "provider_base_urls": {
+      "xai": "https://example.test"
+    },
+    "meeting_detection_reminder_enabled": true,
+    "recordings_dir": "/tmp/recordings",
+    "post_transcribe_hook": null
+  },
+  "auth_status": {
+    "provider": "deepgram",
+    "configured": true
+  },
+  "transcription_summary": {
+    "provider": "xai",
+    "audio_file": "/tmp/meeting.mp3",
+    "transcript_file": "/tmp/meeting.transcript.md",
+    "text": "Hello",
+    "duration": 1.25,
+    "channels": {
+      "provider_specific": [
+        "value"
+      ]
+    },
+    "post_transcribe_hook_error": null
+  },
+  "open_folder_result": {
+    "opened": true,
+    "folder": "/tmp/recordings"
+  },
+  "capture_state_event": {
+    "type": "capture-state",
+    "browser_audio_capture": true,
+    "browser_video_capture": false,
+    "browser_capture": true
+  }
+}

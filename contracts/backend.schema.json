@@ -1,0 +1,249 @@
+{
+  "$defs": {
+    "AuthStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "configured": {
+          "type": "boolean"
+        },
+        "provider": {
+          "$ref": "#/$defs/TranscriptionProvider"
+        }
+      },
+      "required": [
+        "provider",
+        "configured"
+      ],
+      "type": "object"
+    },
+    "CaptureEventType": {
+      "enum": [
+        "capture-state"
+      ],
+      "type": "string"
+    },
+    "CaptureStateEvent": {
+      "additionalProperties": false,
+      "properties": {
+        "browser_audio_capture": {
+          "type": "boolean"
+        },
+        "browser_capture": {
+          "type": "boolean"
+        },
+        "browser_video_capture": {
+          "type": "boolean"
+        },
+        "type": {
+          "$ref": "#/$defs/CaptureEventType"
+        }
+      },
+      "required": [
+        "type",
+        "browser_audio_capture",
+        "browser_video_capture",
+        "browser_capture"
+      ],
+      "type": "object"
+    },
+    "ExtensionConfig": {
+      "additionalProperties": false,
+      "properties": {
+        "meeting_detection_reminder_enabled": {
+          "type": "boolean"
+        },
+        "post_transcribe_hook": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider_base_urls": {
+          "$ref": "#/$defs/ProviderBaseUrls"
+        },
+        "recordings_dir": {
+          "type": "string"
+        },
+        "transcription_provider": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TranscriptionProvider"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "transcription_provider",
+        "provider_base_urls",
+        "meeting_detection_reminder_enabled",
+        "recordings_dir",
+        "post_transcribe_hook"
+      ],
+      "type": "object"
+    },
+    "OpenFolderResult": {
+      "additionalProperties": false,
+      "properties": {
+        "folder": {
+          "type": "string"
+        },
+        "opened": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "opened",
+        "folder"
+      ],
+      "type": "object"
+    },
+    "ProviderBaseUrls": {
+      "additionalProperties": false,
+      "properties": {
+        "deepgram": {
+          "type": "string"
+        },
+        "xai": {
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "RecordingStatus": {
+      "additionalProperties": false,
+      "properties": {
+        "file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "message": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "partial_file": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pid": {
+          "format": "int32",
+          "maximum": 2147483647,
+          "minimum": -2147483648,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "recording": {
+          "type": "boolean"
+        },
+        "started_at": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "recording",
+        "pid",
+        "file",
+        "partial_file",
+        "started_at",
+        "message"
+      ],
+      "type": "object"
+    },
+    "TranscriptionProvider": {
+      "enum": [
+        "xai",
+        "deepgram"
+      ],
+      "type": "string"
+    },
+    "TranscriptionSummary": {
+      "additionalProperties": false,
+      "properties": {
+        "audio_file": {
+          "type": "string"
+        },
+        "channels": true,
+        "duration": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
+        },
+        "post_transcribe_hook_error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provider": {
+          "$ref": "#/$defs/TranscriptionProvider"
+        },
+        "text": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "transcript_file": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "audio_file",
+        "transcript_file",
+        "text",
+        "duration",
+        "channels",
+        "post_transcribe_hook_error"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "urn:heimdall:contract:backend:v1",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "auth_status": {
+      "$ref": "#/$defs/AuthStatus"
+    },
+    "capture_state_event": {
+      "$ref": "#/$defs/CaptureStateEvent"
+    },
+    "extension_config": {
+      "$ref": "#/$defs/ExtensionConfig"
+    },
+    "open_folder_result": {
+      "$ref": "#/$defs/OpenFolderResult"
+    },
+    "recording_status": {
+      "$ref": "#/$defs/RecordingStatus"
+    },
+    "transcription_summary": {
+      "$ref": "#/$defs/TranscriptionSummary"
+    }
+  },
+  "required": [
+    "recording_status",
+    "extension_config",
+    "auth_status",
+    "transcription_summary",
+    "open_folder_result",
+    "capture_state_event"
+  ],
+  "title": "BackendContract",
+  "type": "object"
+}

@@ -5,30 +5,30 @@ import Gtk from "gi://Gtk";
 
 import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js";
 
-const TRANSCRIPTION_PROVIDERS = [
-	{ id: "xai", label: "xAI", defaultBaseUrl: "https://api.x.ai" },
-	{ id: "deepgram", label: "Deepgram", defaultBaseUrl: "https://api.deepgram.com" },
-] as const;
+import { BackendClient } from "./backend-client.js";
+import { errorFromCause } from "./errors.js";
+import type { ExtensionConfig, TranscriptionProvider } from "./generated/contracts.js";
+
+const TRANSCRIPTION_PROVIDER_DEFINITIONS = {
+	xai: { id: "xai", label: "xAI", defaultBaseUrl: "https://api.x.ai" },
+	deepgram: {
+		id: "deepgram",
+		label: "Deepgram",
+		defaultBaseUrl: "https://api.deepgram.com",
+	},
+} satisfies {
+	readonly [Provider in TranscriptionProvider]: {
+		readonly id: Provider;
+		readonly label: string;
+		readonly defaultBaseUrl: string;
+	};
+};
+const TRANSCRIPTION_PROVIDERS = Object.values(TRANSCRIPTION_PROVIDER_DEFINITIONS);
 
 const PROVIDER_OPTIONS: Array<TranscriptionProvider | null> = [
 	null,
 	...TRANSCRIPTION_PROVIDERS.map((provider) => provider.id),
 ];
-
-type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number]["id"];
-
-type BackendConfig = {
-	transcription_provider: TranscriptionProvider | null;
-	provider_base_urls: Partial<Record<TranscriptionProvider, string>>;
-	meeting_detection_reminder_enabled: boolean;
-	recordings_dir: string;
-	post_transcribe_hook: string | null;
-};
-
-type AuthStatus = {
-	provider: TranscriptionProvider;
-	configured: boolean;
-};
 
 type ProviderWidgets = {
 	group: Adw.PreferencesGroup;
@@ -39,7 +39,7 @@ type ProviderWidgets = {
 };
 
 export default class MeetingRecorderPreferences extends ExtensionPreferences {
-	private _backendPath = "";
+	private _backendClient: BackendClient | null = null;
 	private _providerRow: Adw.ComboRow | null = null;
 	private _meetingDetectionReminderRow: Adw.SwitchRow | null = null;
 	private _recordingsDirRow: Adw.ActionRow | null = null;
@@ -51,7 +51,8 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	private _loadingMeetingDetectionReminder = false;
 
 	override fillPreferencesWindow(window: Adw.PreferencesWindow) {
-		this._backendPath = GLib.build_filenamev([this.path, "bin", "meeting-recorder"]);
+		const backendPath = GLib.build_filenamev([this.path, "bin", "meeting-recorder"]);
+		this._backendClient = new BackendClient(backendPath);
 		window.set_title("Meeting Recorder");
 
 		const page = new Adw.PreferencesPage({
@@ -220,19 +221,21 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	}
 
 	private _load(window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "get"])
+		this._requireBackendClient()
+			.getConfig()
 			.then((config) => this._applyConfig(config))
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 
 		for (const provider of TRANSCRIPTION_PROVIDERS) {
 			const widgets = this._providerWidgets.get(provider.id);
 			if (!widgets) continue;
 
-			this._runBackend<AuthStatus>(["auth", "status", provider.id])
+			this._requireBackendClient()
+				.getAuthStatus(provider.id)
 				.then((status) =>
 					this._applyAuthStatus(widgets.group, widgets.removeButton, status.configured),
 				)
-				.catch((error) => this._showGroupError(widgets.group, error));
+				.catch((cause) => this._showGroupError(widgets.group, errorFromCause(cause)));
 		}
 	}
 
@@ -244,7 +247,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		this._loadingProvider = false;
 	}
 
-	private _applyConfig(config: BackendConfig) {
+	private _applyConfig(config: ExtensionConfig) {
 		this._applyProvider(config.transcription_provider);
 		this._applyProviderBaseUrls(config.provider_base_urls);
 		this._applyMeetingDetectionReminder(config.meeting_detection_reminder_enabled);
@@ -252,7 +255,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		this._applyPostTranscribeHook(config.post_transcribe_hook);
 	}
 
-	private _applyProviderBaseUrls(baseUrls: Partial<Record<TranscriptionProvider, string>>) {
+	private _applyProviderBaseUrls(baseUrls: ExtensionConfig["provider_base_urls"]) {
 		for (const provider of TRANSCRIPTION_PROVIDERS) {
 			const widgets = this._providerWidgets.get(provider.id);
 			if (!widgets) continue;
@@ -289,8 +292,8 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		provider: TranscriptionProvider | null,
 		window: Adw.PreferencesWindow,
 	) {
-		const value = provider ?? "disabled";
-		this._runBackend<BackendConfig>(["config", "set-provider", value])
+		this._requireBackendClient()
+			.setTranscriptionProvider(provider)
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(
@@ -298,7 +301,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 					`Transcription provider: ${providerLabel(config.transcription_provider)}`,
 				);
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _saveProviderBaseUrl(
@@ -312,34 +315,33 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			return;
 		}
 
-		this._runBackend<BackendConfig>(["config", "set-provider-base-url", provider, baseUrl])
+		this._requireBackendClient()
+			.setProviderBaseUrl(provider, baseUrl)
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(window, `${providerLabel(provider)} Base URL updated`);
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _resetProviderBaseUrl(provider: TranscriptionProvider, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "reset-provider-base-url", provider])
+		this._requireBackendClient()
+			.resetProviderBaseUrl(provider)
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(window, `${providerLabel(provider)} Base URL reset`);
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _setMeetingDetectionReminder(enabled: boolean, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>([
-			"config",
-			"set-meeting-detection-reminder",
-			String(enabled),
-		])
+		this._requireBackendClient()
+			.setMeetingDetectionReminder(enabled)
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(window, `Meeting reminders ${enabled ? "enabled" : "disabled"}`);
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _chooseRecordingsDir(window: Adw.PreferencesWindow) {
@@ -376,21 +378,23 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	}
 
 	private _setRecordingsDir(path: string, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "set-recordings-dir", path])
+		this._requireBackendClient()
+			.setRecordingsDir(path)
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(window, "Recordings folder updated");
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _resetRecordingsDir(window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "reset-recordings-dir"])
+		this._requireBackendClient()
+			.resetRecordingsDir()
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(window, "Recordings folder reset");
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _choosePostTranscribeHook(window: Adw.PreferencesWindow) {
@@ -427,21 +431,23 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	}
 
 	private _setPostTranscribeHook(path: string, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "set-post-transcribe-hook", path])
+		this._requireBackendClient()
+			.setPostTranscribeHook(path)
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(window, "Post-transcribe hook updated");
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _clearPostTranscribeHook(window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "clear-post-transcribe-hook"])
+		this._requireBackendClient()
+			.clearPostTranscribeHook()
 			.then((config) => {
 				this._applyConfig(config);
 				this._toast(window, "Post-transcribe hook cleared");
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _saveApiKey(
@@ -459,12 +465,13 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			return;
 		}
 
-		this._runBackend<AuthStatus>(["auth", "set-stdin", provider], apiKey)
+		this._requireBackendClient()
+			.setApiKey(provider, apiKey)
 			.then((status) => {
 				this._applyAuthStatus(group, removeButton, status.configured);
 				this._toast(window, `${providerLabel(provider)} API key saved`);
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _deleteApiKey(
@@ -475,12 +482,13 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		window: Adw.PreferencesWindow,
 	) {
 		row.set_text("");
-		this._runBackend<AuthStatus>(["auth", "delete", provider])
+		this._requireBackendClient()
+			.deleteApiKey(provider)
 			.then((status) => {
 				this._applyAuthStatus(group, removeButton, status.configured);
 				this._toast(window, `${providerLabel(provider)} API key removed`);
 			})
-			.catch((error) => this._showError(window, error));
+			.catch((cause) => this._showError(window, errorFromCause(cause)));
 	}
 
 	private _applyAuthStatus(
@@ -492,57 +500,23 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		removeButton.set_visible(configured);
 	}
 
-	private _showGroupError(group: Adw.PreferencesGroup, error: unknown) {
-		group.set_description(errorMessage(error));
+	private _showGroupError(group: Adw.PreferencesGroup, error: Error) {
+		group.set_description(error.message);
 	}
 
-	private async _runBackend<T>(args: string[], stdin: string | null = null): Promise<T> {
-		const flags =
-			stdin === null
-				? Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
-				: Gio.SubprocessFlags.STDIN_PIPE |
-					Gio.SubprocessFlags.STDOUT_PIPE |
-					Gio.SubprocessFlags.STDERR_PIPE;
-		const proc = Gio.Subprocess.new([this._backendPath, ...args], flags);
-		const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc, stdin);
-		const stdout = stdoutBytes ?? "";
-		const stderr = stderrBytes ?? "";
+	private _requireBackendClient(): BackendClient {
+		if (this._backendClient) return this._backendClient;
 
-		if (!proc.get_successful()) {
-			const detail =
-				stderr.trim() || stdout.trim() || `exit status ${proc.get_exit_status()}`;
-			throw new Error(detail);
-		}
-
-		try {
-			return JSON.parse(stdout) as T;
-		} catch {
-			throw new Error(`invalid backend response: ${stdout}`);
-		}
+		throw new Error("preferences backend client is not initialized");
 	}
 
-	private _showError(window: Adw.PreferencesWindow, error: unknown) {
-		this._toast(window, errorMessage(error));
+	private _showError(window: Adw.PreferencesWindow, error: Error) {
+		this._toast(window, error.message);
 	}
 
 	private _toast(window: Adw.PreferencesWindow, title: string) {
 		window.add_toast(new Adw.Toast({ title }));
 	}
-}
-
-function communicateUtf8(
-	proc: Gio.Subprocess,
-	stdin: string | null,
-): Promise<[boolean, string, string]> {
-	return new Promise((resolve, reject) => {
-		proc.communicate_utf8_async(stdin, null, (_source, result) => {
-			try {
-				resolve(proc.communicate_utf8_finish(result));
-			} catch (error) {
-				reject(error);
-			}
-		});
-	});
 }
 
 function providerIndex(provider: TranscriptionProvider | null) {
@@ -560,8 +534,4 @@ function providerLabel(provider: TranscriptionProvider | null) {
 
 function defaultRecordingsDir() {
 	return GLib.build_filenamev([GLib.get_home_dir(), "Recordings", "Meetings"]);
-}
-
-function errorMessage(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
 }

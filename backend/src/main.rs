@@ -1,10 +1,10 @@
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::Local;
-mod auth;
-mod config;
-mod transcription;
-
 use clap::{ArgAction, Parser, Subcommand};
+use meeting_recorder::protocol::{
+    CaptureEventType, CaptureStateEvent, OpenFolderResult, RecordingStatus,
+};
+use meeting_recorder::{auth, config, transcription};
 use nix::sys::signal::{kill, Signal};
 use nix::unistd::Pid;
 use serde::{Deserialize, Serialize};
@@ -99,6 +99,19 @@ impl RecordingState {
             partial_file: None,
             started_at: None,
             message: message.into(),
+        }
+    }
+}
+
+impl From<RecordingState> for RecordingStatus {
+    fn from(state: RecordingState) -> Self {
+        Self {
+            recording: state.recording,
+            pid: state.pid,
+            file: state.file,
+            partial_file: state.partial_file,
+            started_at: state.started_at,
+            message: state.message,
         }
     }
 }
@@ -219,9 +232,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        CommandKind::Start => print_json(&start()?),
-        CommandKind::Stop => print_json(&stop()?),
-        CommandKind::Status => print_json(&status()?),
+        CommandKind::Start => print_json(&RecordingStatus::from(start()?)),
+        CommandKind::Stop => print_json(&RecordingStatus::from(stop()?)),
+        CommandKind::Status => print_json(&RecordingStatus::from(status()?)),
         CommandKind::OpenFolder => {
             let folder = config::recordings_dir()?;
             fs::create_dir_all(&folder)?;
@@ -232,7 +245,10 @@ fn main() -> Result<()> {
                 .stderr(Stdio::null())
                 .spawn()
                 .context("failed to open recordings folder with xdg-open")?;
-            print_json(&serde_json::json!({ "opened": true, "folder": folder }))
+            print_json(&OpenFolderResult {
+                opened: true,
+                folder,
+            })
         }
         CommandKind::Config { command } => match command {
             ConfigCommand::Get => print_json(&config::get()?),
@@ -482,12 +498,12 @@ fn monitor_capture() -> Result<()> {
         if last_state != Some(state) {
             serde_json::to_writer(
                 &mut stdout,
-                &serde_json::json!({
-                    "type": "capture-state",
-                    "browser_audio_capture": state.browser_audio_capture,
-                    "browser_video_capture": state.browser_video_capture,
-                    "browser_capture": state.browser_audio_capture || state.browser_video_capture,
-                }),
+                &CaptureStateEvent {
+                    event_type: CaptureEventType::CaptureState,
+                    browser_audio_capture: state.browser_audio_capture,
+                    browser_video_capture: state.browser_video_capture,
+                    browser_capture: state.browser_audio_capture || state.browser_video_capture,
+                },
             )?;
             stdout.write_all(b"\n")?;
             stdout.flush()?;
@@ -553,8 +569,7 @@ fn command_output(program: &str, args: &[&str]) -> Result<String> {
         );
     }
 
-    Ok(String::from_utf8(output.stdout)
-        .with_context(|| format!("{program} returned non-UTF-8 output"))?)
+    String::from_utf8(output.stdout).with_context(|| format!("{program} returned non-UTF-8 output"))
 }
 
 fn default_pipewire_node_name(node: &str) -> Result<String> {

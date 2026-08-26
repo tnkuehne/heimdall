@@ -2,12 +2,11 @@ mod deepgram;
 pub mod provider;
 mod xai;
 
+use crate::protocol::{TranscriptionProvider as ProviderId, TranscriptionSummary};
 use crate::{auth, config};
 use anyhow::{bail, Context, Result};
 use deepgram::DeepgramProvider;
-use provider::{
-    default_transcript_path, TranscriptionProvider, TranscriptionRequest, TranscriptionSummary,
-};
+use provider::{default_transcript_path, TranscriptionProvider, TranscriptionRequest};
 use serde_json::Value;
 use std::env;
 use std::fmt::Write;
@@ -85,11 +84,10 @@ pub fn transcribe(
     })
 }
 
-fn provider_for(provider: &str) -> Box<dyn TranscriptionProvider> {
+fn provider_for(provider: ProviderId) -> Box<dyn TranscriptionProvider> {
     match provider {
-        "xai" => Box::new(XaiProvider),
-        "deepgram" => Box::new(DeepgramProvider),
-        _ => unreachable!("provider should have been normalized before dispatch"),
+        ProviderId::Xai => Box::new(XaiProvider),
+        ProviderId::Deepgram => Box::new(DeepgramProvider),
     }
 }
 
@@ -195,7 +193,7 @@ fn write_transcript(path: &PathBuf, response: &Value) -> Result<()> {
 }
 
 fn spawn_post_transcribe_hook(
-    provider: &str,
+    provider: ProviderId,
     audio_file: &PathBuf,
     transcript_file: &PathBuf,
     duration: Option<f64>,
@@ -205,14 +203,12 @@ fn spawn_post_transcribe_hook(
         Ok(config) => config,
         Err(error) => return Some(error.to_string()),
     };
-    let Some(hook) = config.post_transcribe_hook else {
-        return None;
-    };
+    let hook = config.post_transcribe_hook?;
 
     let mut command = Command::new(&hook);
     command
         .env("MEETING_RECORDER_EVENT", "post_transcribe")
-        .env("MEETING_RECORDER_PROVIDER", provider)
+        .env("MEETING_RECORDER_PROVIDER", provider.as_str())
         .env("MEETING_RECORDER_AUDIO_FILE", audio_file)
         .env("MEETING_RECORDER_TRANSCRIPT_FILE", transcript_file)
         .env("MEETING_RECORDER_RECORDINGS_DIR", &config.recordings_dir)

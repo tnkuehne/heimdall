@@ -1,6 +1,6 @@
 {
-  "$schema": "./node_modules/oxfmt/configuration_schema.json",
-  "tabWidth": 4,
-  "useTabs": true,
-  "ignorePatterns": ["tools/lint-rules/**"]
+	"$schema": "./node_modules/oxfmt/configuration_schema.json",
+	"tabWidth": 4,
+	"useTabs": true,
+	"ignorePatterns": ["extension/generated/**", "tools/lint-rules/**"]
 }

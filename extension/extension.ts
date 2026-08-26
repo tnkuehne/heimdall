@@ -10,6 +10,10 @@ import * as MessageTray from "resource:///org/gnome/shell/ui/messageTray.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 
+import { BackendClient, decodeCaptureStateEvent } from "./backend-client.js";
+import { errorFromCause } from "./errors.js";
+import type { RecordingStatus, TranscriptionProvider } from "./generated/contracts.js";
+
 const STATUS_INTERVAL_SECONDS = 2;
 const MEETING_REMINDER_COOLDOWN_SECONDS = 10 * 60;
 const GOOGLE_MEET_TITLE_MARKERS = ["google meet", "meet - google chrome"] as const;
@@ -21,42 +25,16 @@ const CHROME_PWA_APP_ID_PREFIX = "chrome-";
 const FLATPAK_CHROME_APP_ID_PREFIX = "com.google.chrome";
 const DESKTOP_APP_ID_SUFFIX = ".desktop";
 
-const TRANSCRIPTION_PROVIDERS = [
-	{ id: "xai", label: "xAI" },
-	{ id: "deepgram", label: "Deepgram" },
-] as const;
-
-type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number]["id"];
-
-type BackendStatus = {
-	recording: boolean;
-	pid: number | null;
-	file: string | null;
-	partial_file: string | null;
-	started_at: string | null;
-	message: string | null;
+const TRANSCRIPTION_PROVIDER_DEFINITIONS = {
+	xai: { id: "xai", label: "xAI" },
+	deepgram: { id: "deepgram", label: "Deepgram" },
+} satisfies {
+	readonly [Provider in TranscriptionProvider]: {
+		readonly id: Provider;
+		readonly label: string;
+	};
 };
-
-type BackendConfig = {
-	transcription_provider: TranscriptionProvider | null;
-	meeting_detection_reminder_enabled: boolean;
-};
-
-type TranscriptionSummary = {
-	provider: TranscriptionProvider;
-	audio_file: string;
-	transcript_file: string;
-	text: string | null;
-	duration: number | null;
-	post_transcribe_hook_error: string | null;
-};
-
-type CaptureStateEvent = {
-	type: "capture-state";
-	browser_audio_capture: boolean;
-	browser_video_capture: boolean;
-	browser_capture: boolean;
-};
+const TRANSCRIPTION_PROVIDERS = Object.values(TRANSCRIPTION_PROVIDER_DEFINITIONS);
 
 class MeetingRecorderExtension extends Extension {
 	backendPath = "";
@@ -94,6 +72,7 @@ class MeetingRecorderIndicator {
 	readonly button: PanelMenu.Button;
 
 	private readonly _extension: MeetingRecorderExtension;
+	private readonly _backend: BackendClient;
 	private readonly _menu: PopupMenu.PopupMenu;
 	private readonly _icon: St.Icon;
 	private readonly _toggleItem: PopupMenu.PopupMenuItem;
@@ -118,6 +97,7 @@ class MeetingRecorderIndicator {
 
 	constructor(extension: MeetingRecorderExtension) {
 		this._extension = extension;
+		this._backend = new BackendClient(extension.backendPath);
 		this.button = new PanelMenu.Button(0.0, "Meeting Recorder");
 		this._menu = this._requirePopupMenu(this.button.menu);
 
@@ -140,7 +120,9 @@ class MeetingRecorderIndicator {
 
 		this._openFolderItem = new PopupMenu.PopupMenuItem("Open Recordings Folder");
 		this._openFolderItem.connect("activate", () => {
-			this._runBackend(["open-folder"]).catch((error) => this._notifyError(error));
+			this._backend
+				.openRecordingsFolder()
+				.catch((cause) => this._notifyError(errorFromCause(cause)));
 		});
 		this._menu.addMenuItem(this._openFolderItem);
 
@@ -159,7 +141,7 @@ class MeetingRecorderIndicator {
 		this._preferencesItem.connect("activate", () => this._extension.openPreferences());
 		this._menu.addMenuItem(this._preferencesItem);
 
-		this._loadConfig().catch((error) => this._notifyError(error));
+		this._loadConfig().catch((cause) => this._notifyError(errorFromCause(cause)));
 		this._startCaptureMonitor();
 		this._watchFocusedWindow();
 		this._focusWindowSignalId = global.display.connect("notify::focus-window", () => {
@@ -181,21 +163,21 @@ class MeetingRecorderIndicator {
 
 	async refresh() {
 		try {
-			const status = await this._runBackend<BackendStatus>(["status"]);
+			const status = await this._backend.getRecordingStatus();
 			this._applyStatus(status);
 			await this._loadConfig();
-		} catch (error) {
+		} catch (cause) {
 			this._recording = false;
 			this._setUi(false, "Recorder unavailable", "Start Recording");
-			logUnknownError(error, "Meeting Recorder status refresh");
+			logError(errorFromCause(cause), "Meeting Recorder status refresh");
 		}
 	}
 
 	private async _toggleRecording() {
 		try {
-			const result = await this._runBackend<BackendStatus>([
-				this._recording ? "stop" : "start",
-			]);
+			const result = this._recording
+				? await this._backend.stopRecording()
+				: await this._backend.startRecording();
 			this._applyStatus(result);
 
 			if (result.recording) Main.notify("Meeting Recorder", "Recording started");
@@ -203,12 +185,12 @@ class MeetingRecorderIndicator {
 				this._notifyRecordingSaved(result.file);
 				this._autoTranscribe(result.file);
 			}
-		} catch (error) {
-			this._notifyError(error);
+		} catch (cause) {
+			this._notifyError(errorFromCause(cause));
 		}
 	}
 
-	private _applyStatus(status: BackendStatus) {
+	private _applyStatus(status: RecordingStatus) {
 		this._recording = Boolean(status.recording);
 		if (status.file) this._lastFile = status.file;
 
@@ -234,30 +216,6 @@ class MeetingRecorderIndicator {
 		this._toggleItem.label.text = toggleText;
 	}
 
-	private async _runBackend<T>(args: string[]): Promise<T> {
-		const argv = [this._extension.backendPath, ...args];
-		const proc = Gio.Subprocess.new(
-			argv,
-			Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-		);
-
-		const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc);
-		const stdout = stdoutBytes ?? "";
-		const stderr = stderrBytes ?? "";
-
-		if (!proc.get_successful()) {
-			const detail =
-				stderr.trim() || stdout.trim() || `exit status ${proc.get_exit_status()}`;
-			throw new Error(detail);
-		}
-
-		try {
-			return JSON.parse(stdout) as T;
-		} catch {
-			throw new Error(`invalid backend response: ${stdout}`);
-		}
-	}
-
 	private _requirePopupMenu(
 		menu: PopupMenu.PopupMenu | PopupMenu.PopupDummyMenu,
 	): PopupMenu.PopupMenu {
@@ -269,20 +227,21 @@ class MeetingRecorderIndicator {
 	private _providerItem(label: string, provider: TranscriptionProvider | null) {
 		const item = new PopupMenu.PopupMenuItem(label);
 		item.connect("activate", () => {
-			this._setTranscriptionProvider(provider).catch((error) => this._notifyError(error));
+			this._setTranscriptionProvider(provider).catch((cause) =>
+				this._notifyError(errorFromCause(cause)),
+			);
 		});
 		return item;
 	}
 
 	private async _loadConfig() {
-		const config = await this._runBackend<BackendConfig>(["config", "get"]);
+		const config = await this._backend.getConfig();
 		this._applyTranscriptionProvider(config.transcription_provider);
 		this._meetingDetectionReminderEnabled = config.meeting_detection_reminder_enabled;
 	}
 
 	private async _setTranscriptionProvider(provider: TranscriptionProvider | null) {
-		const value = provider ?? "disabled";
-		const config = await this._runBackend<BackendConfig>(["config", "set-provider", value]);
+		const config = await this._backend.setTranscriptionProvider(provider);
 		this._applyTranscriptionProvider(config.transcription_provider);
 	}
 
@@ -303,13 +262,14 @@ class MeetingRecorderIndicator {
 		if (provider === null) return;
 
 		Main.notify("Meeting Recorder", `Transcribing with ${providerLabel(provider)}`);
-		this._runBackend<TranscriptionSummary>(["transcribe", file, "--provider", provider])
+		this._backend
+			.transcribe(file, provider)
 			.then((summary) => {
 				this._notifyTranscriptSaved(summary.transcript_file);
 				if (summary.post_transcribe_hook_error)
 					this._notifyError(new Error(summary.post_transcribe_hook_error));
 			})
-			.catch((error) => this._notifyError(error));
+			.catch((cause) => this._notifyError(errorFromCause(cause)));
 	}
 
 	private _watchFocusedWindow() {
@@ -394,14 +354,14 @@ class MeetingRecorderIndicator {
 				(_proc, result) => {
 					try {
 						this._captureMonitor?.wait_check_finish(result);
-					} catch (error) {
+					} catch (cause) {
 						if (!this._captureMonitorCancellable?.is_cancelled())
-							this._notifyError(error);
+							this._notifyError(errorFromCause(cause));
 					}
 				},
 			);
-		} catch (error) {
-			this._notifyError(error);
+		} catch (cause) {
+			this._notifyError(errorFromCause(cause));
 		}
 	}
 
@@ -424,15 +384,14 @@ class MeetingRecorderIndicator {
 
 				this._handleCaptureMonitorLine(line);
 				this._readCaptureMonitorLine(stream);
-			} catch (error) {
-				if (!cancellable.is_cancelled()) this._notifyError(error);
+			} catch (cause) {
+				if (!cancellable.is_cancelled()) this._notifyError(errorFromCause(cause));
 			}
 		});
 	}
 
 	private _handleCaptureMonitorLine(line: string) {
-		const event = JSON.parse(line) as CaptureStateEvent;
-		if (event.type !== "capture-state") return;
+		const event = decodeCaptureStateEvent(line);
 
 		const captureActive = Boolean(event.browser_capture);
 		if (this._browserCaptureActive === captureActive) return;
@@ -496,37 +455,15 @@ class MeetingRecorderIndicator {
 			const folder = GLib.path_get_dirname(file);
 			const uri = Gio.File.new_for_path(folder).get_uri();
 			Gio.AppInfo.launch_default_for_uri(uri, null);
-		} catch (error) {
-			this._notifyError(error);
+		} catch (cause) {
+			this._notifyError(errorFromCause(cause));
 		}
 	}
 
-	private _notifyError(error: unknown) {
-		const message = error instanceof Error ? error.message : String(error);
-		logUnknownError(error, "Meeting Recorder");
-		Main.notifyError("Meeting Recorder", message);
+	private _notifyError(error: Error) {
+		logError(error, "Meeting Recorder");
+		Main.notifyError("Meeting Recorder", error.message);
 	}
-}
-
-function communicateUtf8(proc: Gio.Subprocess): Promise<[boolean, string, string]> {
-	return new Promise((resolve, reject) => {
-		proc.communicate_utf8_async(null, null, (_source, result) => {
-			try {
-				resolve(proc.communicate_utf8_finish(result));
-			} catch (error) {
-				reject(error);
-			}
-		});
-	});
-}
-
-function logUnknownError(error: unknown, context: string) {
-	if (error instanceof Error) {
-		logError(error, context);
-		return;
-	}
-
-	logError(new Error(String(error)), context);
 }
 
 function providerLabel(provider: TranscriptionProvider | null) {

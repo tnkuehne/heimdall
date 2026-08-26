@@ -1,17 +1,11 @@
+use crate::protocol::{AuthStatus, TranscriptionProvider};
 use anyhow::{bail, Context, Result};
 use keyring_core::{set_default_store, Entry, Error as KeyringError};
 use secrecy::SecretString;
-use serde::Serialize;
 use std::io::Read;
 use zbus_secret_service_keyring_store::Store;
 
 const SERVICE_NAME: &str = "meeting-recorder";
-
-#[derive(Debug, Serialize)]
-pub struct AuthStatus {
-    pub provider: &'static str,
-    pub configured: bool,
-}
 
 pub fn set_api_key(provider: &str) -> Result<AuthStatus> {
     let provider = normalize_provider(provider)?;
@@ -29,7 +23,7 @@ pub fn set_api_key_from_stdin(provider: &str) -> Result<AuthStatus> {
     set_api_key_value(provider, &api_key)
 }
 
-fn set_api_key_value(provider: &'static str, api_key: &str) -> Result<AuthStatus> {
+fn set_api_key_value(provider: TranscriptionProvider, api_key: &str) -> Result<AuthStatus> {
     let api_key = api_key.trim().to_string();
 
     if api_key.is_empty() {
@@ -68,9 +62,7 @@ pub fn delete_api_key(provider: &str) -> Result<AuthStatus> {
     }
 }
 
-pub fn get_api_key_if_configured(provider: &str) -> Result<Option<SecretString>> {
-    let provider = normalize_provider(provider)?;
-
+pub fn get_api_key_if_configured(provider: TranscriptionProvider) -> Result<Option<SecretString>> {
     match entry(provider)?.get_password() {
         Ok(password) if password.is_empty() => Ok(None),
         Ok(password) => Ok(Some(password.into())),
@@ -80,15 +72,15 @@ pub fn get_api_key_if_configured(provider: &str) -> Result<Option<SecretString>>
     }
 }
 
-pub fn normalize_provider(provider: &str) -> Result<&'static str> {
+pub fn normalize_provider(provider: &str) -> Result<TranscriptionProvider> {
     match provider.trim().to_ascii_lowercase().as_str() {
-        "xai" | "grok" => Ok("xai"),
-        "deepgram" => Ok("deepgram"),
+        "xai" | "grok" => Ok(TranscriptionProvider::Xai),
+        "deepgram" => Ok(TranscriptionProvider::Deepgram),
         other => bail!("unsupported transcription provider: {other}"),
     }
 }
 
-fn has_api_key(provider: &str) -> Result<bool> {
+fn has_api_key(provider: TranscriptionProvider) -> Result<bool> {
     match entry(provider)?.get_password() {
         Ok(password) => Ok(!password.is_empty()),
         Err(KeyringError::NoEntry) => Ok(false),
@@ -97,10 +89,10 @@ fn has_api_key(provider: &str) -> Result<bool> {
     }
 }
 
-fn entry(provider: &str) -> Result<Entry> {
+fn entry(provider: TranscriptionProvider) -> Result<Entry> {
     let store = Store::new().context("failed to connect to GNOME Keyring Secret Service")?;
     set_default_store(store);
 
-    Entry::new(SERVICE_NAME, provider)
+    Entry::new(SERVICE_NAME, provider.as_str())
         .with_context(|| format!("failed to open GNOME Keyring entry for {provider}"))
 }

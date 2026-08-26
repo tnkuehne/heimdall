@@ -1,3 +1,4 @@
+use crate::protocol::TranscriptionProvider as ProviderId;
 use crate::transcription::provider::{endpoint_url, TranscriptionProvider, TranscriptionRequest};
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::multipart::{Form, Part};
@@ -11,8 +12,8 @@ const DEFAULT_BASE_URL: &str = "https://api.x.ai";
 pub struct XaiProvider;
 
 impl TranscriptionProvider for XaiProvider {
-    fn id(&self) -> &'static str {
-        "xai"
+    fn id(&self) -> ProviderId {
+        ProviderId::Xai
     }
 
     fn default_base_url(&self) -> &'static str {

@@ -1,0 +1,12 @@
+{
+	"extends": "@tsconfig/strictest/tsconfig.json",
+	"compilerOptions": {
+		"module": "ES2022",
+		"moduleResolution": "bundler",
+		"noEmit": true,
+		"skipLibCheck": false,
+		"target": "ES2022",
+		"types": []
+	},
+	"include": ["extension/generated/contracts.ts", "extension/generated/validators.d.ts"]
+}

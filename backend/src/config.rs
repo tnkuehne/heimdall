@@ -1,4 +1,5 @@
 use crate::auth;
+use crate::protocol::{ExtensionConfig, ProviderBaseUrls, TranscriptionProvider};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -11,9 +12,9 @@ const CONFIG_FILE_NAME: &str = "config.json";
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
-    pub transcription_provider: Option<String>,
+    pub transcription_provider: Option<TranscriptionProvider>,
     #[serde(default)]
-    pub provider_base_urls: BTreeMap<String, String>,
+    pub provider_base_urls: BTreeMap<TranscriptionProvider, String>,
     #[serde(default = "default_meeting_detection_reminder_enabled")]
     pub meeting_detection_reminder_enabled: bool,
     #[serde(default = "default_recordings_dir_unchecked")]
@@ -33,42 +34,39 @@ impl Default for Config {
     }
 }
 
-pub fn get() -> Result<Config> {
-    read_config()
+pub fn get() -> Result<ExtensionConfig> {
+    Ok(read_config()?.into())
 }
 
-pub fn set_transcription_provider(provider: &str) -> Result<Config> {
+pub fn set_transcription_provider(provider: &str) -> Result<ExtensionConfig> {
     let mut config = read_config()?;
-    config.transcription_provider = normalize_optional_provider(provider)?.map(ToOwned::to_owned);
+    config.transcription_provider = normalize_optional_provider(provider)?;
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
-pub fn set_provider_base_url(provider: &str, base_url: &str) -> Result<Config> {
+pub fn set_provider_base_url(provider: &str, base_url: &str) -> Result<ExtensionConfig> {
     let provider = auth::normalize_provider(provider)?;
     let base_url = normalize_base_url(base_url)?;
     let mut config = read_config()?;
-    config
-        .provider_base_urls
-        .insert(provider.to_owned(), base_url);
+    config.provider_base_urls.insert(provider, base_url);
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
-pub fn reset_provider_base_url(provider: &str) -> Result<Config> {
+pub fn reset_provider_base_url(provider: &str) -> Result<ExtensionConfig> {
     let provider = auth::normalize_provider(provider)?;
     let mut config = read_config()?;
-    config.provider_base_urls.remove(provider);
+    config.provider_base_urls.remove(&provider);
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
-pub fn provider_base_url(provider: &str) -> Result<Option<String>> {
-    let provider = auth::normalize_provider(provider)?;
-    Ok(read_config()?.provider_base_urls.get(provider).cloned())
+pub fn provider_base_url(provider: TranscriptionProvider) -> Result<Option<String>> {
+    Ok(read_config()?.provider_base_urls.get(&provider).cloned())
 }
 
-pub fn set_recordings_dir(path: &Path) -> Result<Config> {
+pub fn set_recordings_dir(path: &Path) -> Result<ExtensionConfig> {
     if !path.is_absolute() {
         bail!("recordings directory must be an absolute path");
     }
@@ -85,24 +83,24 @@ pub fn set_recordings_dir(path: &Path) -> Result<Config> {
     let mut config = read_config()?;
     config.recordings_dir = path.to_path_buf();
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
-pub fn set_meeting_detection_reminder(enabled: bool) -> Result<Config> {
+pub fn set_meeting_detection_reminder(enabled: bool) -> Result<ExtensionConfig> {
     let mut config = read_config()?;
     config.meeting_detection_reminder_enabled = enabled;
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
-pub fn reset_recordings_dir() -> Result<Config> {
+pub fn reset_recordings_dir() -> Result<ExtensionConfig> {
     let mut config = read_config()?;
     config.recordings_dir = default_recordings_dir()?;
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
-pub fn set_post_transcribe_hook(path: &Path) -> Result<Config> {
+pub fn set_post_transcribe_hook(path: &Path) -> Result<ExtensionConfig> {
     if !path.is_absolute() {
         bail!("post-transcribe hook must be an absolute path");
     }
@@ -119,14 +117,14 @@ pub fn set_post_transcribe_hook(path: &Path) -> Result<Config> {
     let mut config = read_config()?;
     config.post_transcribe_hook = Some(path.to_path_buf());
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
-pub fn clear_post_transcribe_hook() -> Result<Config> {
+pub fn clear_post_transcribe_hook() -> Result<ExtensionConfig> {
     let mut config = read_config()?;
     config.post_transcribe_hook = None;
     write_config(&config)?;
-    Ok(config)
+    Ok(config.into())
 }
 
 pub fn recordings_dir() -> Result<PathBuf> {
@@ -149,10 +147,31 @@ fn default_meeting_detection_reminder_enabled() -> bool {
     true
 }
 
-fn normalize_optional_provider(provider: &str) -> Result<Option<&'static str>> {
+fn normalize_optional_provider(provider: &str) -> Result<Option<TranscriptionProvider>> {
     match provider.trim().to_ascii_lowercase().as_str() {
         "none" | "disabled" | "off" => Ok(None),
         value => Ok(Some(auth::normalize_provider(value)?)),
+    }
+}
+
+impl From<Config> for ExtensionConfig {
+    fn from(config: Config) -> Self {
+        Self {
+            transcription_provider: config.transcription_provider,
+            provider_base_urls: ProviderBaseUrls {
+                xai: config
+                    .provider_base_urls
+                    .get(&TranscriptionProvider::Xai)
+                    .cloned(),
+                deepgram: config
+                    .provider_base_urls
+                    .get(&TranscriptionProvider::Deepgram)
+                    .cloned(),
+            },
+            meeting_detection_reminder_enabled: config.meeting_detection_reminder_enabled,
+            recordings_dir: config.recordings_dir,
+            post_transcribe_hook: config.post_transcribe_hook,
+        }
     }
 }
 

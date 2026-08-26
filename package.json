@@ -1,25 +1,33 @@
 {
-  "name": "meeting-recorder-extension",
-  "version": "0.1.0",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "build": "tsc --project tsconfig.json && cp extension/metadata.json build/extension/metadata.json",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck",
-    "format": "oxfmt extension",
-    "format:check": "oxfmt --check extension",
-    "lint": "oxlint --deny-warnings extension",
-    "lint:fix": "oxlint --fix extension",
-    "typecheck": "tsc --project tsconfig.json --noEmit"
-  },
-  "devDependencies": {
-    "@girs/gnome-shell": "46.0.2",
-    "@oxlint/plugins": "1.80.0",
-    "@tsconfig/strictest": "^2.0.8",
-    "oxfmt": "0.65.0",
-    "oxlint": "1.80.0",
-    "oxlint-tsgolint": "7.0.2001",
-    "typescript": "7.0.2"
-  },
-  "packageManager": "pnpm@11.1.3"
+	"name": "meeting-recorder-extension",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"build": "tsdown && cp extension/metadata.json build/extension/metadata.json",
+		"check": "pnpm run contracts:check && pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test:contracts && pnpm run test:contracts:integration",
+		"contracts:check": "cargo run --quiet --manifest-path backend/Cargo.toml --bin generate-contract -- --check && node scripts/generate-contracts.mjs --check",
+		"format": "oxfmt extension scripts tests tsdown.config.ts package.json tsconfig.json tsconfig.contracts.json .oxlintrc.json .oxfmtrc.json",
+		"format:check": "oxfmt --check extension scripts tests tsdown.config.ts package.json tsconfig.json tsconfig.contracts.json .oxlintrc.json .oxfmtrc.json",
+		"generate:contracts": "cargo run --quiet --manifest-path backend/Cargo.toml --bin generate-contract && node scripts/generate-contracts.mjs",
+		"lint": "oxlint --deny-warnings extension scripts tests tsdown.config.ts",
+		"lint:fix": "oxlint --fix extension scripts tests tsdown.config.ts",
+		"test:contracts": "node --test tests/contracts.test.mjs",
+		"test:contracts:gjs": "pnpm run build && gjs -m tests/contracts.gjs.mjs && gjs -m tests/backend-client.gjs.mjs",
+		"test:contracts:integration": "cargo build --quiet --manifest-path backend/Cargo.toml --bin meeting-recorder && node --test tests/backend-contract.integration.test.mjs",
+		"typecheck": "tsc --project tsconfig.contracts.json && tsc --project tsconfig.json --noEmit"
+	},
+	"devDependencies": {
+		"@girs/gnome-shell": "46.0.2",
+		"@oxlint/plugins": "1.80.0",
+		"@tsconfig/strictest": "^2.0.8",
+		"ajv": "8.20.0",
+		"json-schema-to-typescript": "15.0.4",
+		"oxfmt": "0.65.0",
+		"oxlint": "1.80.0",
+		"oxlint-tsgolint": "7.0.2001",
+		"tsdown": "0.22.14",
+		"typescript": "7.0.2"
+	},
+	"packageManager": "pnpm@11.1.3"
 }

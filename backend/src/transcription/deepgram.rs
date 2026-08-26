@@ -1,3 +1,4 @@
+use crate::protocol::TranscriptionProvider as ProviderId;
 use crate::transcription::provider::{endpoint_url, TranscriptionProvider, TranscriptionRequest};
 use anyhow::{bail, Context, Result};
 use reqwest::blocking::Client;
@@ -10,8 +11,8 @@ const DEFAULT_BASE_URL: &str = "https://api.deepgram.com";
 pub struct DeepgramProvider;
 
 impl TranscriptionProvider for DeepgramProvider {
-    fn id(&self) -> &'static str {
-        "deepgram"
+    fn id(&self) -> ProviderId {
+        ProviderId::Deepgram
     }
 
     fn default_base_url(&self) -> &'static str {

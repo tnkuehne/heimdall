@@ -35,11 +35,17 @@ mkdir -p \
   "${STAGE_DIR}/usr/share/doc/${PACKAGE}"
 
 install -m 0644 "${ROOT_DIR}/build/extension/metadata.json" "${EXTENSION_DIR}/metadata.json"
-install -m 0644 "${ROOT_DIR}/build/extension/extension.js" "${EXTENSION_DIR}/extension.js"
-install -m 0644 "${ROOT_DIR}/build/extension/prefs.js" "${EXTENSION_DIR}/prefs.js"
+install -m 0644 "${ROOT_DIR}/build/extension/"*.js "${EXTENSION_DIR}/"
 install -m 0755 "${ROOT_DIR}/backend/target/release/meeting-recorder" "${EXTENSION_DIR}/bin/meeting-recorder"
 install -m 0644 "${ROOT_DIR}/README.md" "${STAGE_DIR}/usr/share/doc/${PACKAGE}/README.md"
 ln -s "../share/gnome-shell/extensions/${UUID}/bin/meeting-recorder" "${STAGE_DIR}/usr/bin/meeting-recorder"
+
+for required_file in metadata.json extension.js prefs.js backend-client.js bin/meeting-recorder; do
+  if [ ! -e "${EXTENSION_DIR}/${required_file}" ]; then
+    echo "Package staging is missing ${required_file}" >&2
+    exit 1
+  fi
+done
 
 cat >"${STAGE_DIR}/DEBIAN/control" <<EOF
 Package: ${PACKAGE}

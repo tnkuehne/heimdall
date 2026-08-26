@@ -197,10 +197,24 @@ MEETING_RECORDER_CHANNELS=2
 
 ## Development
 
-The GNOME Shell source of truth is TypeScript:
+The GNOME Shell source is TypeScript. Backend response contracts are defined once in Rust and
+generated into JSON Schema, TypeScript types, and standalone runtime validators:
 
 ```text
 extension/extension.ts
+backend/src/protocol.rs
+```
+
+After changing a Rust protocol type, regenerate and commit the contract artifacts:
+
+```sh
+pnpm run generate:contracts
+```
+
+Run the complete contract freshness, formatting, lint, type, and validator test suite with:
+
+```sh
+pnpm run check
 ```
 
 Build the generated extension JavaScript with:
@@ -210,7 +224,12 @@ pnpm install
 pnpm run build
 ```
 
-Generated GNOME Shell files are written to `build/extension` and should not be committed.
+Generated GNOME Shell files are written to `build/extension` and should not be committed. The two
+GNOME entry modules share a stable `backend-client.js` chunk containing the generated runtime
+validators. The install and Debian scripts package all three JavaScript files.
+
+The contract artifacts under `contracts` and `extension/generated` are deterministic and should be
+committed. CI rejects stale generated files.
 
 GNOME/GJS types come from the published `@girs/gnome-shell` package pinned for GNOME Shell 46.
 

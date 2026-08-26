@@ -1,6 +1,6 @@
+use crate::protocol::TranscriptionProvider as ProviderId;
 use anyhow::Result;
 use secrecy::SecretString;
-use serde::Serialize;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use url::Url;
@@ -13,19 +13,8 @@ pub struct TranscriptionRequest {
     pub multichannel: bool,
 }
 
-#[derive(Debug, Serialize)]
-pub struct TranscriptionSummary {
-    pub provider: &'static str,
-    pub audio_file: PathBuf,
-    pub transcript_file: PathBuf,
-    pub text: Option<String>,
-    pub duration: Option<f64>,
-    pub channels: Option<Value>,
-    pub post_transcribe_hook_error: Option<String>,
-}
-
 pub trait TranscriptionProvider {
-    fn id(&self) -> &'static str;
+    fn id(&self) -> ProviderId;
     fn default_base_url(&self) -> &'static str;
     fn transcribe(
         &self,

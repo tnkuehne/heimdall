@@ -33,8 +33,20 @@ jobs:
           node-version: "22"
           cache: pnpm
 
-      - name: Check TypeScript
+      - name: Install GJS
+        run: sudo apt-get update && sudo apt-get install --yes gjs
+
+      - name: Check contracts and TypeScript
         run: pnpm install --frozen-lockfile && pnpm run check
+
+      - name: Test generated validators with GJS
+        run: pnpm run test:contracts:gjs
+
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path backend/Cargo.toml --check
+
+      - name: Lint Rust
+        run: cargo clippy --manifest-path backend/Cargo.toml --all-targets --all-features -- -D warnings
 
       - name: Test Rust
         run: cargo test --manifest-path backend/Cargo.toml
