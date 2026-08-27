@@ -34,7 +34,6 @@ enum CommandKind {
     Start,
     Stop,
     Status,
-    OpenFolder,
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -222,18 +221,6 @@ fn main() -> Result<()> {
         CommandKind::Start => print_json(&start()?),
         CommandKind::Stop => print_json(&stop()?),
         CommandKind::Status => print_json(&status()?),
-        CommandKind::OpenFolder => {
-            let folder = config::recordings_dir()?;
-            fs::create_dir_all(&folder)?;
-            Command::new("xdg-open")
-                .arg(&folder)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-                .context("failed to open recordings folder with xdg-open")?;
-            print_json(&serde_json::json!({ "opened": true, "folder": folder }))
-        }
         CommandKind::Config { command } => match command {
             ConfigCommand::Get => print_json(&config::get()?),
             ConfigCommand::SetProvider { provider } => {

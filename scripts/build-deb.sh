@@ -48,7 +48,7 @@ Section: gnome
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: Timo Kühne <contact@timokuehne.com>
-Depends: ffmpeg, wireplumber, gnome-shell (>= 46), xdg-utils, libc6, libgcc-s1
+Depends: ffmpeg, wireplumber, gnome-shell (>= 46), libc6, libgcc-s1
 Homepage: https://timokuehne.com
 Description: GNOME Shell meeting recorder
  Records the default microphone and current system audio from the GNOME top bar.

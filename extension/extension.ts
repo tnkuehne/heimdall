@@ -38,6 +38,7 @@ type BackendStatus = {
 };
 
 type BackendConfig = {
+	recordings_dir: string;
 	transcription_provider: TranscriptionProvider | null;
 	meeting_detection_reminder_enabled: boolean;
 };
@@ -140,7 +141,7 @@ class MeetingRecorderIndicator {
 
 		this._openFolderItem = new PopupMenu.PopupMenuItem("Open Recordings Folder");
 		this._openFolderItem.connect("activate", () => {
-			this._runBackend(["open-folder"]).catch((error) => this._notifyError(error));
+			void this._openRecordingsFolder();
 		});
 		this._menu.addMenuItem(this._openFolderItem);
 
@@ -278,6 +279,19 @@ class MeetingRecorderIndicator {
 		const config = await this._runBackend<BackendConfig>(["config", "get"]);
 		this._applyTranscriptionProvider(config.transcription_provider);
 		this._meetingDetectionReminderEnabled = config.meeting_detection_reminder_enabled;
+	}
+
+	private async _openRecordingsFolder() {
+		try {
+			const config = await this._runBackend<BackendConfig>(["config", "get"]);
+			if (GLib.mkdir_with_parents(config.recordings_dir, 0o755) !== 0)
+				throw new Error(`Failed to create recordings folder: ${config.recordings_dir}`);
+
+			const uri = Gio.File.new_for_path(config.recordings_dir).get_uri();
+			await Gio.app_info_launch_default_for_uri_async(uri, null, null);
+		} catch (error) {
+			this._notifyError(error);
+		}
 	}
 
 	private async _setTranscriptionProvider(provider: TranscriptionProvider | null) {
