@@ -10,6 +10,12 @@ import * as MessageTray from "resource:///org/gnome/shell/ui/messageTray.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 
+Gio._promisify(
+	Gio,
+	"app_info_launch_default_for_uri_async",
+	"app_info_launch_default_for_uri_finish",
+);
+
 const STATUS_INTERVAL_SECONDS = 2;
 const MEETING_REMINDER_COOLDOWN_SECONDS = 10 * 60;
 const GOOGLE_MEET_TITLE_MARKERS = ["google meet", "meet - google chrome"] as const;
