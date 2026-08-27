@@ -17,7 +17,6 @@ need ffmpeg
 need wpctl
 need gnome-extensions
 need pnpm
-need xdg-open
 
 cd "${ROOT_DIR}"
 CI=true pnpm install --frozen-lockfile

@@ -99,7 +99,6 @@ Commands:
 meeting-recorder start
 meeting-recorder stop
 meeting-recorder status
-meeting-recorder open-folder
 meeting-recorder config get
 meeting-recorder config set-recordings-dir /absolute/path
 meeting-recorder config reset-recordings-dir
