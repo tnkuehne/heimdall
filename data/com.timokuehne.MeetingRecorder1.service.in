@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=com.timokuehne.MeetingRecorder1
+Exec=@EXECUTABLE@ service
+SystemdService=meeting-recorder.service

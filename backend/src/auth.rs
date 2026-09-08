@@ -29,15 +29,15 @@ pub fn set_api_key_from_stdin(provider: &str) -> Result<AuthStatus> {
     set_api_key_value(provider, &api_key)
 }
 
-fn set_api_key_value(provider: &'static str, api_key: &str) -> Result<AuthStatus> {
-    let api_key = api_key.trim().to_string();
+pub(crate) fn set_api_key_value(provider: &'static str, api_key: &str) -> Result<AuthStatus> {
+    let api_key = api_key.trim();
 
     if api_key.is_empty() {
         bail!("API key cannot be empty");
     }
 
     entry(provider)?
-        .set_password(&api_key)
+        .set_password(api_key)
         .with_context(|| format!("failed to store {provider} API key in GNOME Keyring"))?;
 
     Ok(AuthStatus {

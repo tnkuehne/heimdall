@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node name="/com/timokuehne/MeetingRecorder1">
+  <interface name="com.timokuehne.MeetingRecorder1">
+    <method name="GetStatus">
+      <arg name="recording" type="b" direction="out"/>
+      <arg name="file" type="s" direction="out"/>
+      <arg name="started_at" type="s" direction="out"/>
+      <arg name="message" type="s" direction="out"/>
+    </method>
+    <method name="StartRecording">
+      <arg name="file" type="s" direction="out"/>
+      <arg name="started_at" type="s" direction="out"/>
+    </method>
+    <method name="StopRecording">
+      <arg name="file" type="s" direction="out"/>
+    </method>
+    <method name="Transcribe">
+      <arg name="audio_file" type="s" direction="in"/>
+      <arg name="provider" type="s" direction="in"/>
+      <arg name="language" type="s" direction="in"/>
+      <arg name="format" type="b" direction="in"/>
+      <arg name="multichannel" type="b" direction="in"/>
+      <arg name="output" type="s" direction="in"/>
+      <arg name="transcript_file" type="s" direction="out"/>
+      <arg name="post_transcribe_hook_error" type="s" direction="out"/>
+    </method>
+    <method name="GetApiKeyStatus">
+      <arg name="provider" type="s" direction="in"/>
+      <arg name="configured" type="b" direction="out"/>
+    </method>
+    <method name="SetApiKey">
+      <arg name="provider" type="s" direction="in"/>
+      <arg name="api_key" type="h" direction="in"/>
+    </method>
+    <method name="DeleteApiKey">
+      <arg name="provider" type="s" direction="in"/>
+    </method>
+    <signal name="TranscriptionCompleted">
+      <arg name="audio_file" type="s"/>
+      <arg name="transcript_file" type="s"/>
+      <arg name="post_transcribe_hook_error" type="s"/>
+    </signal>
+    <signal name="TranscriptionFailed">
+      <arg name="audio_file" type="s"/>
+      <arg name="message" type="s"/>
+    </signal>
+    <property name="BrowserAudioCapture" type="b" access="read"/>
+    <property name="BrowserVideoCapture" type="b" access="read"/>
+    <property name="Recording" type="b" access="read"/>
+    <property name="RecordingFile" type="s" access="read"/>
+    <property name="StartedAt" type="s" access="read"/>
+  </interface>
+</node>

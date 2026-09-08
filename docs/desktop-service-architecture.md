@@ -1,14 +1,14 @@
 # Architekturentscheidung: Nativer Heimdall-Desktop-Service
 
-**Status:** Entwurf zur Bestätigung
+**Status:** Angenommen und umgesetzt
 
-**Stand:** 28. August 2026
+**Stand:** 8. September 2026
 
 **Zielgruppe:** Maintainer von Heimdall
 
 **Geltungsbereich:** Extension, Preferences, Rust-Backend, CLI, Einstellungen und lokale IPC
 
-Dieses Dokument beschreibt den geplanten Zielzustand. Es orientiert sich an den
+Dieses Dokument beschreibt den Zielzustand und seine Umsetzung. Es orientiert sich an den
 Plain-Language-Prinzipien aus ISO 24495-1:2023: Die Entscheidung steht zuerst, Begriffe werden
 erklärt und offene Punkte sind von beschlossenen Punkten getrennt. Es behauptet keine formale
 ISO-Konformität.
@@ -42,7 +42,7 @@ ab, optimiert aber eine Prozess- und JSON-Grenze, die im Zielsystem nicht mehr b
 
 ## Warum wir die Architektur ändern
 
-Heute startet die Extension für fast jede Operation einen neuen CLI-Prozess und liest JSON aus
+Vor der Migration startete die Extension für fast jede Operation einen neuen CLI-Prozess und las JSON aus
 `stdout`:
 
 ```text
@@ -198,20 +198,19 @@ Abwärtskompatibilität. Client und Service werden gemeinsam ersetzt.
 Eine eingecheckte D-Bus-Introspection-XML beschreibt Methoden, Argumente, Rückgaben, Properties
 und Signale. Aus ihr entstehen:
 
-- die zur Laufzeit von GJS verwendete Proxy-Beschreibung;
 - TypeScript-Typen und eine Promise-basierte Fassade;
 - lesbare API-Dokumentation.
 
 Für die GJS-TypeScript-Fassade wurde kein ausreichend etablierter fertiger Generator gefunden.
-Der geplante projektspezifische Generator bleibt deshalb bewusst klein: Er versteht nur die von
-Heimdall verwendeten D-Bus-Signaturen, erzeugt keine Transportlogik und bricht bei unbekannten
-Signaturen oder Annotationen ab. Seine Ausgabe wird eingecheckt, mit generierten Markierungen
-versehen und in CI auf Aktualität geprüft.
+Der projektspezifische Generator bleibt deshalb bewusst klein: Er versteht nur die von Heimdall
+verwendeten D-Bus-Signaturen und bricht bei unbekannten Signaturen ab. Er erzeugt typisierte
+asynchrone Gio-Aufrufe, Properties, Signals, GVariant-Prüfungen und die Unix-FD-Übergabe. Seine
+Ausgabe wird eingecheckt, mit generierten Markierungen versehen und in CI auf Aktualität geprüft.
 
 `zbus_xmlgen` erzeugt derzeit Client-Proxies, aber keine fertige Rust-Serverimplementierung. Der
-Rust-Service implementiert die XML deshalb mit `zbus`. Ein Integrationstest startet den echten
-Service auf einem privaten Session Bus, introspektiert ihn und vergleicht seine normalisierte
-Schnittstelle mit der eingecheckten XML. Drift darf den Build nicht passieren.
+Rust-Service implementiert die XML deshalb mit `zbus`. Ein Rust-Vertragstest vergleicht die vom
+zbus-Makro erzeugte Introspection mit der eingecheckten XML. Ein separater Integrationstest startet
+den echten Service auf einem privaten Session Bus. Drift darf den Build nicht passieren.
 
 D-Bus-Introspection beschreibt keine abschließende Liste möglicher Fehler. Öffentliche
 Fehlernamen und ihre Bedeutung werden deshalb neben der XML als Teil des Vertrags dokumentiert
@@ -220,8 +219,7 @@ schließt.
 
 ### Erste fachliche Oberfläche
 
-Die konkrete XML entsteht erst nach einem kleinen Integrationsprototyp. Sie soll ungefähr diese
-Fähigkeiten enthalten:
+Die eingecheckte XML enthält diese Fähigkeiten:
 
 | Art | Fähigkeit |
 | --- | --- |
@@ -282,7 +280,7 @@ werden.
 
 ### Verhalten nach einem Service-Crash
 
-Hier ist noch eine Bestätigung erforderlich. Die empfohlene erste Variante lautet:
+Die umgesetzte Variante lautet:
 
 - `ffmpeg` gehört zum systemd-User-Service und wird nicht absichtlich verwaist.
 - Ein Service-Crash beendet die laufende Aufnahme kontrolliert.
@@ -296,7 +294,7 @@ gewählt, wenn der Produktnutzen das zusätzliche Fehlerrisiko rechtfertigt.
 
 ## Automatische Transkription
 
-Heute startet nur die GNOME-Extension nach dem Stoppen die automatische Transkription. Das würde
+Vor der Migration startete nur die GNOME-Extension nach dem Stoppen die automatische Transkription. Das würde
 jedes neue Frontend zwingen, denselben Workflow nachzubauen.
 
 Die empfohlene Zielregel lautet deshalb:
@@ -317,10 +315,10 @@ Das ist kein allgemeines Job-System. Es ist ein gemeinsamer fachlicher Workflow.
 API-Keys bleiben im freedesktop Secret Service und niemals in GSettings, JSON-Dateien,
 Kommandozeilenargumenten oder Logs.
 
-Preferences übergibt einen neuen Key bevorzugt über einen Unix-Dateideskriptor. Gio und D-Bus
-unterstützen FD-Listen; ein GJS-Prototyp muss den vollständigen Weg bis `zbus` beweisen, bevor das
-Interface festgeschrieben wird. Der FD vermeidet, dass der Key als normaler String im
-D-Bus-Payload erscheint.
+Preferences übergibt einen neuen Key über einen Unix-Dateideskriptor. Der generierte GJS-Client
+erstellt dafür ein anonymes Unix-Socket-Paar und übergibt die lesende Seite mit der D-Bus-FD-Liste
+an `zbus`. Ein Integrationstest beweist den vollständigen Transportweg. Der FD vermeidet, dass der
+Key als normaler String im D-Bus-Payload erscheint.
 
 Der Session Bus ist trotzdem keine Sicherheitsgrenze zwischen Prozessen desselben Benutzers. FD-
 Übergabe reduziert unnötige Secret-Kopien und versehentliches Logging, schützt aber keinen bereits
@@ -356,31 +354,19 @@ Ein Bundler wird nur eingeführt, wenn eine konkrete Runtime-Abhängigkeit oder 
 GJS-Paketierungsproblem ihn erforderlich macht. Falls das geschieht, bleibt tsdown/Rolldown der
 bevorzugte Weg. esbuild ist nicht Teil der Architektur.
 
-## Umsetzung in risikoorientierter Reihenfolge
+## Umgesetzter Schnitt
 
-1. PR #6 ohne Merge schließen und seinen Branch erhalten.
-2. Öffentliche Namen für Produkt, Bus, Interface, Object Path und GSettings vereinheitlichen.
-3. Desktop-Aufgaben wie das Öffnen des Aufnahmeordners aus dem Backend nach GJS verschieben.
-4. GSettings-Schema und fachliche Settings-Prüfung einführen; Config-JSON entfernen.
-5. GNOME-Extension und Preferences vollständig auf direkten GSettings-Zugriff umstellen.
-6. Einen kleinen D-Bus-Prototyp bauen:
-   - eine Methode;
-   - eine Property mit `PropertiesChanged`;
-   - einen fachlichen Fehler;
-   - einen API-Key über Unix-FD;
-   - Aktivierung durch den installierten systemd-User-Service;
-   - asynchroner Aufruf aus GJS.
-7. Erst bei bestandenem Prototyp die D-Bus-XML festschreiben und Bindings erzeugen.
-8. Rust-Fachlogik aus dem heutigen CLI-Dispatcher in wiederverwendbare Module verschieben.
-9. Aufnahme-Koordinator und PipeWire-Monitor in den Service verschieben.
-10. GNOME-Extension und Preferences auf D-Bus umstellen.
-11. Zustandsbehaftete CLI-Befehle an denselben Service anbinden.
-12. Paketierung, Development-Install und CI für den Service ergänzen.
-13. Erst nach End-to-End-Tests den alten Subprozess-/JSON-Pfad entfernen.
-
-Unabhängig wertvolle Änderungen aus PR #6 werden neu und gezielt umgesetzt: PR-Validierung,
-Rustfmt, Clippy, Rust-Tests, sichere Secret-Eingabe und passende CLI-Integrationstests. Die
-JSON-Schema-/Ajv-Kette und ihre tsdown-Abhängigkeit werden nicht übernommen.
+- Ein langlebiger zbus-Service serialisiert Aufnahmeoperationen und veröffentlicht Zustand als
+  Properties.
+- Der PipeWire-Monitor läuft einmal im Service und ersetzt den NDJSON-Monitorprozess.
+- Automatische Transkription läuft nach `StopRecording` im Service und meldet Erfolg oder Fehler
+  als Signal.
+- Extension und Preferences verwenden ausschließlich den generierten asynchronen GJS-Client.
+- `start`, `stop` und `status` der CLI verwenden denselben Service; zustandsarme Auth- und
+  Transkriptionsbefehle bleiben direkte CLI-Funktionen.
+- systemd-User-Unit, D-Bus-Aktivierungsdatei und XML werden mit dem Debian-Paket installiert.
+- Tests prüfen XML↔Rust-Drift, TypeScript-Codegen-Drift, FD-Grenzen und den echten GJS↔zbus-Pfad
+  einschließlich Service-Neustart.
 
 ## Qualitäts- und Abnahmekriterien
 
@@ -405,18 +391,13 @@ Die Migration ist abgeschlossen, wenn:
 - der bestehende Workflow-Name `Release` unverändert bleibt;
 - das installierte System mit `gdbus`, `busctl`, `journalctl` und D-Spy diagnostizierbar ist.
 
-## Noch zu bestätigen
-
-Vor der vollständigen Implementierung müssen diese Punkte ausdrücklich bestätigt oder durch den
-Prototyp entschieden werden:
+## Bestätigte Entscheidungen
 
 - [x] Öffentliche Namensfamilie: Meeting Recorder
-- [ ] `ffmpeg` endet bei Service-Crash; `.part.mp3` bleibt zur Recovery erhalten
-- [ ] Kein Headless-Fallback für zustandsbehaftete CLI-Befehle in Version 1
-- [ ] Automatische Transkription nach `stop` gehört in den Rust-Service
-- [ ] GJS→D-Bus→zbus-Übergabe eines API-Keys per Unix-FD funktioniert zuverlässig
-
-Alle übrigen Kernentscheidungen dieses Dokuments entsprechen dem zuletzt besprochenen Zielbild.
+- [x] `ffmpeg` endet mit der systemd-Service-Cgroup; `.part.mp3` bleibt zur Recovery erhalten
+- [x] Kein Headless-Fallback für zustandsbehaftete CLI-Befehle in Version 1
+- [x] Automatische Transkription nach `stop` gehört in den Rust-Service
+- [x] GJS→D-Bus→zbus-Übergabe eines API-Keys per Unix-FD funktioniert im Integrationstest
 
 ## Quellen
 

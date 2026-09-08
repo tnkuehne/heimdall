@@ -1,2 +1,3 @@
 # Exclude vendored lint rules from GitHub language statistics.
 tools/lint-rules/** -linguist-detectable
+extension/dbus-client.ts linguist-generated=true
