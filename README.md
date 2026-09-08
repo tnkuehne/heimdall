@@ -14,7 +14,7 @@ The recorder uses `wpctl` to find the default microphone and current default sys
 On Debian/Ubuntu-like systems, the `.deb` package declares the runtime dependencies. For source development, install the build tools and runtime commands:
 
 ```sh
-sudo apt install wireplumber ffmpeg gnome-shell
+sudo apt install wireplumber ffmpeg gnome-shell libglib2.0-bin libglib2.0-dev
 ```
 
 Install Rust/Cargo with `rustup` for development builds:
@@ -61,6 +61,15 @@ gnome-extensions enable meeting-recorder@timokuehne.com
 ```
 
 On GNOME Wayland, log out and back in after installing extension JavaScript or preferences changes. GNOME Shell does not reliably reload changed extension modules inside the same session. If the enable command says `Extension "meeting-recorder@timokuehne.com" does not exist`, log out and back in, then run the enable command again.
+
+The development backend installed inside the extension directory discovers the adjacent schema
+automatically. To run the backend directly through Cargo after a development install, provide that
+schema directory explicitly:
+
+```sh
+GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/meeting-recorder@timokuehne.com/schemas" \
+  cargo run --manifest-path backend/Cargo.toml -- status
+```
 
 ## Usage
 

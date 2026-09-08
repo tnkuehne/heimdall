@@ -19,7 +19,13 @@ need ffmpeg
 need wpctl
 need gnome-extensions
 need glib-compile-schemas
+need pkg-config
 need pnpm
+
+if ! pkg-config --exists gio-2.0; then
+  echo "Missing GIO development files. On Debian/Ubuntu, install libglib2.0-dev." >&2
+  exit 1
+fi
 
 cd "${ROOT_DIR}"
 CI=true pnpm install --frozen-lockfile

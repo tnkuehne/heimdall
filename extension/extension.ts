@@ -246,19 +246,10 @@ class MeetingRecorderIndicator {
 
 	private async _runBackend<T>(args: string[]): Promise<T> {
 		const argv = [this._extension.backendPath, ...args];
-		const launcher = new Gio.SubprocessLauncher({
-			flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-		});
-		const developmentSchemaDirectory = GLib.build_filenamev([this._extension.path, "schemas"]);
-		if (
-			GLib.file_test(
-				GLib.build_filenamev([developmentSchemaDirectory, "gschemas.compiled"]),
-				GLib.FileTest.EXISTS,
-			)
-		)
-			launcher.setenv("GSETTINGS_SCHEMA_DIR", developmentSchemaDirectory, true);
-
-		const proc = launcher.spawnv(argv);
+		const proc = Gio.Subprocess.new(
+			argv,
+			Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+		);
 
 		const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc);
 		const stdout = stdoutBytes ?? "";

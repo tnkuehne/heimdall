@@ -60,7 +60,31 @@ pub fn post_transcribe_settings() -> Result<Option<PostTranscribeSettings>> {
 fn settings() -> Result<gio::Settings> {
     let source = gio::SettingsSchemaSource::default()
         .ok_or_else(|| anyhow!("the default GSettings schema source is unavailable"))?;
+
+    if let Some(directory) = adjacent_schema_directory() {
+        let local_source =
+            gio::SettingsSchemaSource::from_directory(&directory, Some(&source), false)
+                .with_context(|| {
+                    format!(
+                        "failed to load the bundled GSettings schemas from {}",
+                        directory.display()
+                    )
+                })?;
+        return settings_from_source(&local_source, gio::SettingsBackend::NONE);
+    }
+
     settings_from_source(&source, gio::SettingsBackend::NONE)
+}
+
+fn adjacent_schema_directory() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    schema_directory_adjacent_to(&executable)
+}
+
+fn schema_directory_adjacent_to(executable: &Path) -> Option<PathBuf> {
+    let extension_directory = executable.parent()?.parent()?;
+    let schema_directory = extension_directory.join("schemas");
+    schema_directory.is_dir().then_some(schema_directory)
 }
 
 fn settings_from_source(
@@ -145,9 +169,24 @@ mod tests {
     use std::process::Command;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    struct TestSchemaDirectory(PathBuf);
+    struct TestDirectory(PathBuf);
 
-    impl Drop for TestSchemaDirectory {
+    impl TestDirectory {
+        fn new(label: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let directory = Self(std::env::temp_dir().join(format!(
+                "meeting-recorder-{label}-{}-{unique}",
+                std::process::id()
+            )));
+            std::fs::create_dir(&directory.0).unwrap();
+            directory
+        }
+    }
+
+    impl Drop for TestDirectory {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
@@ -179,16 +218,22 @@ mod tests {
     }
 
     #[test]
+    fn discovers_schema_next_to_installed_backend() {
+        let directory = TestDirectory::new("layout");
+        let binary_directory = directory.0.join("bin");
+        let schema_directory = directory.0.join("schemas");
+        std::fs::create_dir(&binary_directory).unwrap();
+        std::fs::create_dir(&schema_directory).unwrap();
+
+        assert_eq!(
+            schema_directory_adjacent_to(&binary_directory.join("meeting-recorder")),
+            Some(schema_directory)
+        );
+    }
+
+    #[test]
     fn schema_defaults_and_choices_are_available_through_gio() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
-        let directory = TestSchemaDirectory(std::env::temp_dir().join(format!(
-            "meeting-recorder-settings-{}-{unique}",
-            std::process::id()
-        )));
-        std::fs::create_dir(&directory.0).unwrap();
+        let directory = TestDirectory::new("settings");
         std::fs::copy(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("../data")
