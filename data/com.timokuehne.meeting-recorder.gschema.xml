@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="com.timokuehne.meeting-recorder" path="/com/timokuehne/meeting-recorder/">
+    <key name="transcription-provider" type="s">
+      <choices>
+        <choice value="disabled"/>
+        <choice value="xai"/>
+        <choice value="deepgram"/>
+      </choices>
+      <default>"disabled"</default>
+      <summary>Transcription provider</summary>
+      <description>The provider used for automatic transcription, or disabled.</description>
+    </key>
+    <key name="xai-base-url" type="s">
+      <default>"https://api.x.ai"</default>
+      <summary>xAI base URL</summary>
+      <description>The HTTP or HTTPS base URL used for xAI transcription requests.</description>
+    </key>
+    <key name="deepgram-base-url" type="s">
+      <default>"https://api.deepgram.com"</default>
+      <summary>Deepgram base URL</summary>
+      <description>The HTTP or HTTPS base URL used for Deepgram transcription requests.</description>
+    </key>
+    <key name="recordings-directory" type="s">
+      <default>""</default>
+      <summary>Recordings directory</summary>
+      <description>An absolute directory path. An empty value uses ~/Recordings/Meetings.</description>
+    </key>
+    <key name="post-transcribe-hook" type="s">
+      <default>""</default>
+      <summary>Post-transcribe hook</summary>
+      <description>An absolute executable path, or an empty value to disable the hook.</description>
+    </key>
+    <key name="meeting-detection-reminder-enabled" type="b">
+      <default>true</default>
+      <summary>Meeting detection reminder</summary>
+      <description>Whether to show a reminder when browser meeting capture is detected.</description>
+    </key>
+  </schema>
+</schemalist>

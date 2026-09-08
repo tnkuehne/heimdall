@@ -10,6 +10,16 @@ import * as MessageTray from "resource:///org/gnome/shell/ui/messageTray.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 
+import {
+	SETTINGS_KEYS,
+	SETTINGS_SCHEMA_ID,
+	TRANSCRIPTION_PROVIDERS,
+	providerLabel,
+	recordingsDirectory,
+	transcriptionProvider,
+	type TranscriptionProvider,
+} from "./settings.js";
+
 Gio._promisify(
 	Gio,
 	"app_info_launch_default_for_uri_async",
@@ -27,13 +37,6 @@ const CHROME_PWA_APP_ID_PREFIX = "chrome-";
 const FLATPAK_CHROME_APP_ID_PREFIX = "com.google.chrome";
 const DESKTOP_APP_ID_SUFFIX = ".desktop";
 
-const TRANSCRIPTION_PROVIDERS = [
-	{ id: "xai", label: "xAI" },
-	{ id: "deepgram", label: "Deepgram" },
-] as const;
-
-type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number]["id"];
-
 type BackendStatus = {
 	recording: boolean;
 	pid: number | null;
@@ -41,12 +44,6 @@ type BackendStatus = {
 	partial_file: string | null;
 	started_at: string | null;
 	message: string | null;
-};
-
-type BackendConfig = {
-	recordings_dir: string;
-	transcription_provider: TranscriptionProvider | null;
-	meeting_detection_reminder_enabled: boolean;
 };
 
 type TranscriptionSummary = {
@@ -72,7 +69,7 @@ class MeetingRecorderExtension extends Extension {
 
 	override enable() {
 		this.backendPath = GLib.build_filenamev([this.path, "bin", "meeting-recorder"]);
-		this._indicator = new MeetingRecorderIndicator(this);
+		this._indicator = new MeetingRecorderIndicator(this, this.getSettings(SETTINGS_SCHEMA_ID));
 		Main.panel.addToStatusArea(this.uuid, this._indicator.button);
 
 		void this._indicator.refresh();
@@ -101,6 +98,8 @@ class MeetingRecorderIndicator {
 	readonly button: PanelMenu.Button;
 
 	private readonly _extension: MeetingRecorderExtension;
+	private readonly _settings: Gio.Settings;
+	private readonly _settingsChangedSignalId: number;
 	private readonly _menu: PopupMenu.PopupMenu;
 	private readonly _icon: St.Icon;
 	private readonly _toggleItem: PopupMenu.PopupMenuItem;
@@ -123,8 +122,9 @@ class MeetingRecorderIndicator {
 	private _transcriptionProvider: TranscriptionProvider | null = null;
 	private _meetingDetectionReminderEnabled = true;
 
-	constructor(extension: MeetingRecorderExtension) {
+	constructor(extension: MeetingRecorderExtension, settings: Gio.Settings) {
 		this._extension = extension;
+		this._settings = settings;
 		this.button = new PanelMenu.Button(0.0, "Meeting Recorder");
 		this._menu = this._requirePopupMenu(this.button.menu);
 
@@ -166,7 +166,10 @@ class MeetingRecorderIndicator {
 		this._preferencesItem.connect("activate", () => this._extension.openPreferences());
 		this._menu.addMenuItem(this._preferencesItem);
 
-		this._loadConfig().catch((error) => this._notifyError(error));
+		this._settingsChangedSignalId = this._settings.connect("changed", (_settings, key) => {
+			this._applySetting(key);
+		});
+		this._applySettings();
 		this._startCaptureMonitor();
 		this._watchFocusedWindow();
 		this._focusWindowSignalId = global.display.connect("notify::focus-window", () => {
@@ -175,6 +178,7 @@ class MeetingRecorderIndicator {
 	}
 
 	destroy() {
+		this._settings.disconnect(this._settingsChangedSignalId);
 		if (this._focusWindowSignalId !== null) {
 			global.display.disconnect(this._focusWindowSignalId);
 			this._focusWindowSignalId = null;
@@ -190,7 +194,6 @@ class MeetingRecorderIndicator {
 		try {
 			const status = await this._runBackend<BackendStatus>(["status"]);
 			this._applyStatus(status);
-			await this._loadConfig();
 		} catch (error) {
 			this._recording = false;
 			this._setUi(false, "Recorder unavailable", "Start Recording");
@@ -243,10 +246,19 @@ class MeetingRecorderIndicator {
 
 	private async _runBackend<T>(args: string[]): Promise<T> {
 		const argv = [this._extension.backendPath, ...args];
-		const proc = Gio.Subprocess.new(
-			argv,
-			Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-		);
+		const launcher = new Gio.SubprocessLauncher({
+			flags: Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
+		});
+		const developmentSchemaDirectory = GLib.build_filenamev([this._extension.path, "schemas"]);
+		if (
+			GLib.file_test(
+				GLib.build_filenamev([developmentSchemaDirectory, "gschemas.compiled"]),
+				GLib.FileTest.EXISTS,
+			)
+		)
+			launcher.setenv("GSETTINGS_SCHEMA_DIR", developmentSchemaDirectory, true);
+
+		const proc = launcher.spawnv(argv);
 
 		const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc);
 		const stdout = stdoutBytes ?? "";
@@ -276,34 +288,50 @@ class MeetingRecorderIndicator {
 	private _providerItem(label: string, provider: TranscriptionProvider | null) {
 		const item = new PopupMenu.PopupMenuItem(label);
 		item.connect("activate", () => {
-			this._setTranscriptionProvider(provider).catch((error) => this._notifyError(error));
+			this._setTranscriptionProvider(provider);
 		});
 		return item;
 	}
 
-	private async _loadConfig() {
-		const config = await this._runBackend<BackendConfig>(["config", "get"]);
-		this._applyTranscriptionProvider(config.transcription_provider);
-		this._meetingDetectionReminderEnabled = config.meeting_detection_reminder_enabled;
+	private _applySettings() {
+		this._applyTranscriptionProvider(transcriptionProvider(this._settings));
+		this._meetingDetectionReminderEnabled = this._settings.get_boolean(
+			SETTINGS_KEYS.meetingDetectionReminderEnabled,
+		);
+	}
+
+	private _applySetting(key: string) {
+		switch (key) {
+			case SETTINGS_KEYS.transcriptionProvider:
+				this._applyTranscriptionProvider(transcriptionProvider(this._settings));
+				break;
+			case SETTINGS_KEYS.meetingDetectionReminderEnabled:
+				this._meetingDetectionReminderEnabled = this._settings.get_boolean(key);
+				break;
+		}
 	}
 
 	private async _openRecordingsFolder() {
 		try {
-			const config = await this._runBackend<BackendConfig>(["config", "get"]);
-			if (GLib.mkdir_with_parents(config.recordings_dir, 0o755) !== 0)
-				throw new Error(`Failed to create recordings folder: ${config.recordings_dir}`);
+			const directory = recordingsDirectory(this._settings);
+			if (GLib.mkdir_with_parents(directory, 0o755) !== 0)
+				throw new Error(`Failed to create recordings folder: ${directory}`);
 
-			const uri = Gio.File.new_for_path(config.recordings_dir).get_uri();
+			const uri = Gio.File.new_for_path(directory).get_uri();
 			await Gio.app_info_launch_default_for_uri_async(uri, null, null);
 		} catch (error) {
 			this._notifyError(error);
 		}
 	}
 
-	private async _setTranscriptionProvider(provider: TranscriptionProvider | null) {
-		const value = provider ?? "disabled";
-		const config = await this._runBackend<BackendConfig>(["config", "set-provider", value]);
-		this._applyTranscriptionProvider(config.transcription_provider);
+	private _setTranscriptionProvider(provider: TranscriptionProvider | null) {
+		try {
+			const value = provider ?? "disabled";
+			if (!this._settings.set_string(SETTINGS_KEYS.transcriptionProvider, value))
+				throw new Error("Transcription provider setting is not writable");
+		} catch (error) {
+			this._notifyError(error);
+		}
 	}
 
 	private _applyTranscriptionProvider(provider: TranscriptionProvider | null) {
@@ -547,14 +575,6 @@ function logUnknownError(error: unknown, context: string) {
 	}
 
 	logError(new Error(String(error)), context);
-}
-
-function providerLabel(provider: TranscriptionProvider | null) {
-	if (provider === null) return "Disabled";
-
-	return (
-		TRANSCRIPTION_PROVIDERS.find((candidate) => candidate.id === provider)?.label ?? provider
-	);
 }
 
 function isRelevantMeetingWindow(title: string, appId: string) {

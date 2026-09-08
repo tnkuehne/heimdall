@@ -2,7 +2,7 @@
 
 **Status:** Entwurf zur Bestätigung
 
-**Stand:** 27. August 2026
+**Stand:** 28. August 2026
 
 **Zielgruppe:** Maintainer von Heimdall
 
@@ -180,13 +180,14 @@ Heimdall verwendet den Session Bus. Eine D-Bus-Service-Datei aktiviert einen sys
 beim ersten Aufruf. Der Service bleibt in der ersten Version bis zum Ende der Benutzersitzung
 aktiv. Das vermeidet verfrühte Idle- und Subscription-Logik.
 
-Die endgültige Namensfamilie muss vor dem ersten Interface-Commit einheitlich festgelegt werden.
-Die Beispiele verwenden vorläufig:
+Die öffentliche Namensfamilie ist festgelegt:
 
 ```text
-Bus name:      com.timokuehne.Heimdall1
-Object path:   /com/timokuehne/Heimdall1
-Interface:     com.timokuehne.Heimdall1
+Produkt:       Meeting Recorder
+GSettings:     com.timokuehne.meeting-recorder
+Bus name:      com.timokuehne.MeetingRecorder1
+Object path:   /com/timokuehne/MeetingRecorder1
+Interface:     com.timokuehne.MeetingRecorder1
 ```
 
 Die Endung `1` bezeichnet die erste öffentliche Schnittstelle. Sie verpflichtet uns nicht zu
@@ -358,23 +359,24 @@ bevorzugte Weg. esbuild ist nicht Teil der Architektur.
 ## Umsetzung in risikoorientierter Reihenfolge
 
 1. PR #6 ohne Merge schließen und seinen Branch erhalten.
-2. Einen neuen Branch vom aktuellen `main` erstellen.
-3. Öffentliche Namen für Produkt, Bus, Interface, Object Path und GSettings vereinheitlichen.
-4. Einen kleinen D-Bus-Prototyp bauen:
+2. Öffentliche Namen für Produkt, Bus, Interface, Object Path und GSettings vereinheitlichen.
+3. Desktop-Aufgaben wie das Öffnen des Aufnahmeordners aus dem Backend nach GJS verschieben.
+4. GSettings-Schema und fachliche Settings-Prüfung einführen; Config-JSON entfernen.
+5. GNOME-Extension und Preferences vollständig auf direkten GSettings-Zugriff umstellen.
+6. Einen kleinen D-Bus-Prototyp bauen:
    - eine Methode;
    - eine Property mit `PropertiesChanged`;
    - einen fachlichen Fehler;
    - einen API-Key über Unix-FD;
    - Aktivierung durch den installierten systemd-User-Service;
    - asynchroner Aufruf aus GJS.
-5. Erst bei bestandenem Prototyp die D-Bus-XML festschreiben und Bindings erzeugen.
-6. Rust-Fachlogik aus dem heutigen CLI-Dispatcher in wiederverwendbare Module verschieben.
-7. GSettings-Schema und fachliche Settings-Prüfung einführen; Config-JSON entfernen.
-8. Aufnahme-Koordinator und PipeWire-Monitor in den Service verschieben.
-9. GNOME-Extension und Preferences auf GSettings, Gio und D-Bus umstellen.
-10. Zustandsbehaftete CLI-Befehle an denselben Service anbinden.
-11. Paketierung, Development-Install und CI ergänzen.
-12. Erst nach End-to-End-Tests den alten Subprozess-/JSON-Pfad entfernen.
+7. Erst bei bestandenem Prototyp die D-Bus-XML festschreiben und Bindings erzeugen.
+8. Rust-Fachlogik aus dem heutigen CLI-Dispatcher in wiederverwendbare Module verschieben.
+9. Aufnahme-Koordinator und PipeWire-Monitor in den Service verschieben.
+10. GNOME-Extension und Preferences auf D-Bus umstellen.
+11. Zustandsbehaftete CLI-Befehle an denselben Service anbinden.
+12. Paketierung, Development-Install und CI für den Service ergänzen.
+13. Erst nach End-to-End-Tests den alten Subprozess-/JSON-Pfad entfernen.
 
 Unabhängig wertvolle Änderungen aus PR #6 werden neu und gezielt umgesetzt: PR-Validierung,
 Rustfmt, Clippy, Rust-Tests, sichere Secret-Eingabe und passende CLI-Integrationstests. Die
@@ -408,7 +410,7 @@ Die Migration ist abgeschlossen, wenn:
 Vor der vollständigen Implementierung müssen diese Punkte ausdrücklich bestätigt oder durch den
 Prototyp entschieden werden:
 
-- [ ] Einheitliche öffentliche Namensfamilie: Heimdall oder Meeting Recorder
+- [x] Öffentliche Namensfamilie: Meeting Recorder
 - [ ] `ffmpeg` endet bei Service-Crash; `.part.mp3` bleibt zur Recovery erhalten
 - [ ] Kein Headless-Fallback für zustandsbehaftete CLI-Befehle in Version 1
 - [ ] Automatische Transkription nach `stop` gehört in den Rust-Service
