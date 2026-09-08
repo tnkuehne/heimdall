@@ -4,12 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --project tsconfig.json && cp extension/metadata.json build/extension/metadata.json",
-    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck",
+    "build": "rm -rf build/extension && tsc --project tsconfig.json && cp extension/metadata.json build/extension/metadata.json",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run settings:check",
     "format": "oxfmt extension",
     "format:check": "oxfmt --check extension",
     "lint": "oxlint --deny-warnings extension",
     "lint:fix": "oxlint --fix extension",
+    "settings:check": "./scripts/check-settings.sh",
     "typecheck": "tsc --project tsconfig.json --noEmit"
   },
   "devDependencies": {

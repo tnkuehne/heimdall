@@ -32,17 +32,14 @@ pub fn transcribe(
         .canonicalize()
         .with_context(|| format!("failed to resolve audio file {}", audio_file.display()))?;
     let transcript_file = output.unwrap_or_else(|| default_transcript_path(&audio_file));
-    let custom_base_url = config::provider_base_url(provider.id())?;
-    let base_url = custom_base_url
-        .as_deref()
-        .unwrap_or_else(|| provider.default_base_url());
+    let base_url = config::provider_base_url(provider.id(), provider.default_base_url())?;
     let api_key = match auth::get_api_key_if_configured(provider.id()) {
         Ok(api_key) => api_key,
         // Custom gateways may provide credentials, so keyring availability cannot be required.
-        Err(_) if custom_base_url.is_some() => None,
+        Err(_) if base_url.is_custom => None,
         Err(error) => return Err(error),
     };
-    if custom_base_url.is_none() && api_key.is_none() {
+    if !base_url.is_custom && api_key.is_none() {
         bail!(
             "no {} API key configured; run `meeting-recorder auth set {}` or configure a custom base URL",
             provider.id(),
@@ -61,7 +58,7 @@ pub fn transcribe(
         multichannel: false,
     };
 
-    let response = provider.transcribe(&request, base_url, api_key.as_ref())?;
+    let response = provider.transcribe(&request, &base_url.value, api_key.as_ref())?;
     write_transcript(&transcript_file, &response)?;
     let duration = transcript_duration(&response);
     let channels = transcript_channels(&response);
@@ -201,21 +198,19 @@ fn spawn_post_transcribe_hook(
     duration: Option<f64>,
     channel_count: Option<usize>,
 ) -> Option<String> {
-    let config = match config::get() {
-        Ok(config) => config,
+    let settings = match config::post_transcribe_settings() {
+        Ok(settings) => settings,
         Err(error) => return Some(error.to_string()),
     };
-    let Some(hook) = config.post_transcribe_hook else {
-        return None;
-    };
+    let settings = settings?;
 
-    let mut command = Command::new(&hook);
+    let mut command = Command::new(&settings.hook);
     command
         .env("MEETING_RECORDER_EVENT", "post_transcribe")
         .env("MEETING_RECORDER_PROVIDER", provider)
         .env("MEETING_RECORDER_AUDIO_FILE", audio_file)
         .env("MEETING_RECORDER_TRANSCRIPT_FILE", transcript_file)
-        .env("MEETING_RECORDER_RECORDINGS_DIR", &config.recordings_dir)
+        .env("MEETING_RECORDER_RECORDINGS_DIR", &settings.recordings_dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -230,10 +225,12 @@ fn spawn_post_transcribe_hook(
         command.env("MEETING_RECORDER_CHANNELS", channel_count.to_string());
     }
 
-    command
-        .spawn()
-        .map(|_| None)
-        .unwrap_or_else(|error| Some(format!("failed to spawn {}: {error}", hook.display())))
+    command.spawn().map(|_| None).unwrap_or_else(|error| {
+        Some(format!(
+            "failed to spawn {}: {error}",
+            settings.hook.display()
+        ))
+    })
 }
 
 fn render_markdown(response: &Value) -> String {

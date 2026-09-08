@@ -34,10 +34,6 @@ enum CommandKind {
     Start,
     Stop,
     Status,
-    Config {
-        #[command(subcommand)]
-        command: ConfigCommand,
-    },
     Auth {
         #[command(subcommand)]
         command: AuthCommand,
@@ -64,19 +60,6 @@ enum AuthCommand {
     SetStdin { provider: String },
     Status { provider: String },
     Delete { provider: String },
-}
-
-#[derive(Subcommand)]
-enum ConfigCommand {
-    Get,
-    SetProvider { provider: String },
-    SetProviderBaseUrl { provider: String, base_url: String },
-    ResetProviderBaseUrl { provider: String },
-    SetMeetingDetectionReminder { enabled: String },
-    SetRecordingsDir { path: PathBuf },
-    ResetRecordingsDir,
-    SetPostTranscribeHook { path: PathBuf },
-    ClearPostTranscribeHook,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -221,31 +204,6 @@ fn main() -> Result<()> {
         CommandKind::Start => print_json(&start()?),
         CommandKind::Stop => print_json(&stop()?),
         CommandKind::Status => print_json(&status()?),
-        CommandKind::Config { command } => match command {
-            ConfigCommand::Get => print_json(&config::get()?),
-            ConfigCommand::SetProvider { provider } => {
-                print_json(&config::set_transcription_provider(&provider)?)
-            }
-            ConfigCommand::SetProviderBaseUrl { provider, base_url } => {
-                print_json(&config::set_provider_base_url(&provider, &base_url)?)
-            }
-            ConfigCommand::ResetProviderBaseUrl { provider } => {
-                print_json(&config::reset_provider_base_url(&provider)?)
-            }
-            ConfigCommand::SetMeetingDetectionReminder { enabled } => print_json(
-                &config::set_meeting_detection_reminder(parse_bool(&enabled)?)?,
-            ),
-            ConfigCommand::SetRecordingsDir { path } => {
-                print_json(&config::set_recordings_dir(&path)?)
-            }
-            ConfigCommand::ResetRecordingsDir => print_json(&config::reset_recordings_dir()?),
-            ConfigCommand::SetPostTranscribeHook { path } => {
-                print_json(&config::set_post_transcribe_hook(&path)?)
-            }
-            ConfigCommand::ClearPostTranscribeHook => {
-                print_json(&config::clear_post_transcribe_hook()?)
-            }
-        },
         CommandKind::Auth { command } => match command {
             AuthCommand::Set { provider } => print_json(&auth::set_api_key(&provider)?),
             AuthCommand::SetStdin { provider } => {
@@ -612,14 +570,6 @@ fn is_browser_identifier(value: &str) -> bool {
     ["chrome", "chromium", "brave", "msedge", "firefox"]
         .iter()
         .any(|browser| value.contains(browser))
-}
-
-fn parse_bool(value: &str) -> Result<bool> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "true" | "yes" | "on" | "1" => Ok(true),
-        "false" | "no" | "off" | "0" => Ok(false),
-        _ => bail!("expected true or false"),
-    }
 }
 
 fn state_dir() -> Result<PathBuf> {

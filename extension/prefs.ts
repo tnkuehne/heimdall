@@ -5,25 +5,23 @@ import Gtk from "gi://Gtk";
 
 import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js";
 
-const TRANSCRIPTION_PROVIDERS = [
-	{ id: "xai", label: "xAI", defaultBaseUrl: "https://api.x.ai" },
-	{ id: "deepgram", label: "Deepgram", defaultBaseUrl: "https://api.deepgram.com" },
-] as const;
+import {
+	SETTINGS_KEYS,
+	SETTINGS_SCHEMA_ID,
+	TRANSCRIPTION_PROVIDERS,
+	defaultRecordingsDirectory,
+	postTranscribeHook,
+	providerBaseUrlKey,
+	providerLabel,
+	recordingsDirectory,
+	transcriptionProvider,
+	type TranscriptionProvider,
+} from "./settings.js";
 
 const PROVIDER_OPTIONS: Array<TranscriptionProvider | null> = [
 	null,
 	...TRANSCRIPTION_PROVIDERS.map((provider) => provider.id),
 ];
-
-type TranscriptionProvider = (typeof TRANSCRIPTION_PROVIDERS)[number]["id"];
-
-type BackendConfig = {
-	transcription_provider: TranscriptionProvider | null;
-	provider_base_urls: Partial<Record<TranscriptionProvider, string>>;
-	meeting_detection_reminder_enabled: boolean;
-	recordings_dir: string;
-	post_transcribe_hook: string | null;
-};
 
 type AuthStatus = {
 	provider: TranscriptionProvider;
@@ -40,6 +38,7 @@ type ProviderWidgets = {
 
 export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	private _backendPath = "";
+	private _settings: Gio.Settings | null = null;
 	private _providerRow: Adw.ComboRow | null = null;
 	private _meetingDetectionReminderRow: Adw.SwitchRow | null = null;
 	private _recordingsDirRow: Adw.ActionRow | null = null;
@@ -52,6 +51,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 
 	override fillPreferencesWindow(window: Adw.PreferencesWindow) {
 		this._backendPath = GLib.build_filenamev([this.path, "bin", "meeting-recorder"]);
+		this._settings = this.getSettings(SETTINGS_SCHEMA_ID);
 		window.set_title("Meeting Recorder");
 
 		const page = new Adw.PreferencesPage({
@@ -66,7 +66,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 
 		const recordingsDirRow = new Adw.ActionRow({
 			title: "Save recordings to",
-			subtitle: defaultRecordingsDir(),
+			subtitle: defaultRecordingsDirectory(),
 			subtitle_selectable: true,
 			use_markup: false,
 		});
@@ -170,7 +170,6 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 				title: "Base URL",
 				show_apply_button: true,
 			});
-			baseUrlRow.set_text(provider.defaultBaseUrl);
 			baseUrlRow.connect("apply", () => {
 				this._saveProviderBaseUrl(provider.id, baseUrlRow, window);
 			});
@@ -216,13 +215,22 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		}
 
 		window.add(page);
+		this._requireSettings().connect("changed", () => {
+			try {
+				this._applySettings();
+			} catch (error) {
+				this._showError(window, error);
+			}
+		});
 		this._load(window);
 	}
 
 	private _load(window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "get"])
-			.then((config) => this._applyConfig(config))
-			.catch((error) => this._showError(window, error));
+		try {
+			this._applySettings();
+		} catch (error) {
+			this._showError(window, error);
+		}
 
 		for (const provider of TRANSCRIPTION_PROVIDERS) {
 			const widgets = this._providerWidgets.get(provider.id);
@@ -244,22 +252,25 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		this._loadingProvider = false;
 	}
 
-	private _applyConfig(config: BackendConfig) {
-		this._applyProvider(config.transcription_provider);
-		this._applyProviderBaseUrls(config.provider_base_urls);
-		this._applyMeetingDetectionReminder(config.meeting_detection_reminder_enabled);
-		this._applyRecordingsDir(config.recordings_dir);
-		this._applyPostTranscribeHook(config.post_transcribe_hook);
+	private _applySettings() {
+		const settings = this._requireSettings();
+		this._applyProvider(transcriptionProvider(settings));
+		this._applyProviderBaseUrls(settings);
+		this._applyMeetingDetectionReminder(
+			settings.get_boolean(SETTINGS_KEYS.meetingDetectionReminderEnabled),
+		);
+		this._applyRecordingsDir(recordingsDirectory(settings));
+		this._applyPostTranscribeHook(postTranscribeHook(settings));
 	}
 
-	private _applyProviderBaseUrls(baseUrls: Partial<Record<TranscriptionProvider, string>>) {
+	private _applyProviderBaseUrls(settings: Gio.Settings) {
 		for (const provider of TRANSCRIPTION_PROVIDERS) {
 			const widgets = this._providerWidgets.get(provider.id);
 			if (!widgets) continue;
 
-			const customBaseUrl = baseUrls[provider.id];
-			widgets.baseUrlRow.set_text(customBaseUrl ?? provider.defaultBaseUrl);
-			widgets.resetBaseUrlButton.set_visible(customBaseUrl !== undefined);
+			const key = providerBaseUrlKey(provider.id);
+			widgets.baseUrlRow.set_text(settings.get_string(key));
+			widgets.resetBaseUrlButton.set_visible(settings.get_user_value(key) !== null);
 		}
 	}
 
@@ -275,7 +286,9 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		if (!this._recordingsDirRow || !this._resetRecordingsDirButton) return;
 
 		this._recordingsDirRow.set_subtitle(path);
-		this._resetRecordingsDirButton.set_visible(path !== defaultRecordingsDir());
+		this._resetRecordingsDirButton.set_visible(
+			this._requireSettings().get_user_value(SETTINGS_KEYS.recordingsDirectory) !== null,
+		);
 	}
 
 	private _applyPostTranscribeHook(path: string | null) {
@@ -289,16 +302,13 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		provider: TranscriptionProvider | null,
 		window: Adw.PreferencesWindow,
 	) {
-		const value = provider ?? "disabled";
-		this._runBackend<BackendConfig>(["config", "set-provider", value])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(
-					window,
-					`Transcription provider: ${providerLabel(config.transcription_provider)}`,
-				);
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			this._setString(SETTINGS_KEYS.transcriptionProvider, provider ?? "disabled");
+			this._applySettings();
+			this._toast(window, `Transcription provider: ${providerLabel(provider)}`);
+		} catch (error) {
+			this._showError(window, error);
+		}
 	}
 
 	private _saveProviderBaseUrl(
@@ -306,40 +316,41 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		row: Adw.EntryRow,
 		window: Adw.PreferencesWindow,
 	) {
-		const baseUrl = row.get_text().trim();
-		if (baseUrl.length === 0) {
-			this._toast(window, "Base URL cannot be empty");
-			return;
+		try {
+			const baseUrl = normalizeBaseUrl(row.get_text());
+			this._setString(providerBaseUrlKey(provider), baseUrl);
+			this._applySettings();
+			this._toast(window, `${providerLabel(provider)} Base URL updated`);
+		} catch (error) {
+			this._showError(window, error);
 		}
-
-		this._runBackend<BackendConfig>(["config", "set-provider-base-url", provider, baseUrl])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(window, `${providerLabel(provider)} Base URL updated`);
-			})
-			.catch((error) => this._showError(window, error));
 	}
 
 	private _resetProviderBaseUrl(provider: TranscriptionProvider, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "reset-provider-base-url", provider])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(window, `${providerLabel(provider)} Base URL reset`);
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			this._requireSettings().reset(providerBaseUrlKey(provider));
+			this._applySettings();
+			this._toast(window, `${providerLabel(provider)} Base URL reset`);
+		} catch (error) {
+			this._showError(window, error);
+		}
 	}
 
 	private _setMeetingDetectionReminder(enabled: boolean, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>([
-			"config",
-			"set-meeting-detection-reminder",
-			String(enabled),
-		])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(window, `Meeting reminders ${enabled ? "enabled" : "disabled"}`);
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			if (
+				!this._requireSettings().set_boolean(
+					SETTINGS_KEYS.meetingDetectionReminderEnabled,
+					enabled,
+				)
+			)
+				throw new Error("Meeting reminder setting is not writable");
+
+			this._applySettings();
+			this._toast(window, `Meeting reminders ${enabled ? "enabled" : "disabled"}`);
+		} catch (error) {
+			this._showError(window, error);
+		}
 	}
 
 	private _chooseRecordingsDir(window: Adw.PreferencesWindow) {
@@ -353,7 +364,9 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		dialog.set_modal(true);
 		dialog.set_create_folders(true);
 		dialog.set_current_folder(
-			Gio.File.new_for_path(this._recordingsDirRow?.get_subtitle() ?? defaultRecordingsDir()),
+			Gio.File.new_for_path(
+				this._recordingsDirRow?.get_subtitle() ?? defaultRecordingsDirectory(),
+			),
 		);
 
 		dialog.connect("response", (_source, response) => {
@@ -376,21 +389,26 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	}
 
 	private _setRecordingsDir(path: string, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "set-recordings-dir", path])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(window, "Recordings folder updated");
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			if (!GLib.path_is_absolute(path))
+				throw new Error("Recordings folder must be an absolute path");
+
+			this._setString(SETTINGS_KEYS.recordingsDirectory, path);
+			this._applySettings();
+			this._toast(window, "Recordings folder updated");
+		} catch (error) {
+			this._showError(window, error);
+		}
 	}
 
 	private _resetRecordingsDir(window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "reset-recordings-dir"])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(window, "Recordings folder reset");
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			this._requireSettings().reset(SETTINGS_KEYS.recordingsDirectory);
+			this._applySettings();
+			this._toast(window, "Recordings folder reset");
+		} catch (error) {
+			this._showError(window, error);
+		}
 	}
 
 	private _choosePostTranscribeHook(window: Adw.PreferencesWindow) {
@@ -427,21 +445,30 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	}
 
 	private _setPostTranscribeHook(path: string, window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "set-post-transcribe-hook", path])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(window, "Post-transcribe hook updated");
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			if (!GLib.path_is_absolute(path))
+				throw new Error("Post-transcribe hook must be an absolute path");
+			if (!GLib.file_test(path, GLib.FileTest.IS_REGULAR))
+				throw new Error("Post-transcribe hook must be a regular file");
+			if (!GLib.file_test(path, GLib.FileTest.IS_EXECUTABLE))
+				throw new Error("Post-transcribe hook must be executable");
+
+			this._setString(SETTINGS_KEYS.postTranscribeHook, path);
+			this._applySettings();
+			this._toast(window, "Post-transcribe hook updated");
+		} catch (error) {
+			this._showError(window, error);
+		}
 	}
 
 	private _clearPostTranscribeHook(window: Adw.PreferencesWindow) {
-		this._runBackend<BackendConfig>(["config", "clear-post-transcribe-hook"])
-			.then((config) => {
-				this._applyConfig(config);
-				this._toast(window, "Post-transcribe hook cleared");
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			this._requireSettings().reset(SETTINGS_KEYS.postTranscribeHook);
+			this._applySettings();
+			this._toast(window, "Post-transcribe hook cleared");
+		} catch (error) {
+			this._showError(window, error);
+		}
 	}
 
 	private _saveApiKey(
@@ -490,6 +517,17 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	) {
 		group.set_description(configured ? "API key configured." : "No API key configured.");
 		removeButton.set_visible(configured);
+	}
+
+	private _setString(key: string, value: string) {
+		if (!this._requireSettings().set_string(key, value))
+			throw new Error(`Setting is not writable: ${key}`);
+	}
+
+	private _requireSettings() {
+		if (this._settings) return this._settings;
+
+		throw new Error("Meeting Recorder settings are unavailable");
 	}
 
 	private _showGroupError(group: Adw.PreferencesGroup, error: unknown) {
@@ -550,16 +588,19 @@ function providerIndex(provider: TranscriptionProvider | null) {
 	return index < 0 ? 0 : index;
 }
 
-function providerLabel(provider: TranscriptionProvider | null) {
-	if (provider === null) return "Off";
+function normalizeBaseUrl(value: string) {
+	const normalized = value.trim().replace(/\/+$/u, "");
+	if (normalized.length === 0) throw new Error("Base URL cannot be empty");
 
-	return (
-		TRANSCRIPTION_PROVIDERS.find((candidate) => candidate.id === provider)?.label ?? provider
-	);
-}
+	const uri = GLib.Uri.parse(normalized, GLib.UriFlags.NONE);
+	if (uri.get_scheme() !== "http" && uri.get_scheme() !== "https")
+		throw new Error("Base URL must use HTTP or HTTPS");
+	if (!uri.get_host()) throw new Error("Base URL must include a host");
+	if (uri.get_userinfo()) throw new Error("Base URL must not contain credentials");
+	if (uri.get_query() || uri.get_fragment())
+		throw new Error("Base URL must not contain a query or fragment");
 
-function defaultRecordingsDir() {
-	return GLib.build_filenamev([GLib.get_home_dir(), "Recordings", "Meetings"]);
+	return normalized;
 }
 
 function errorMessage(error: unknown) {

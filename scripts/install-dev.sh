@@ -4,6 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UUID="meeting-recorder@timokuehne.com"
 EXTENSION_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
+SCHEMA_ID="com.timokuehne.meeting-recorder"
+SCHEMA_DIR="${EXTENSION_DIR}/schemas"
 
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -16,23 +18,33 @@ need cargo
 need ffmpeg
 need wpctl
 need gnome-extensions
+need glib-compile-schemas
+need pkg-config
 need pnpm
+
+if ! pkg-config --exists gio-2.0; then
+  echo "Missing GIO development files. On Debian/Ubuntu, install libglib2.0-dev." >&2
+  exit 1
+fi
 
 cd "${ROOT_DIR}"
 CI=true pnpm install --frozen-lockfile
 pnpm run build
 cargo build --release --manifest-path "${ROOT_DIR}/backend/Cargo.toml"
 
-mkdir -p "${EXTENSION_DIR}/bin"
+mkdir -p "${EXTENSION_DIR}/bin" "${SCHEMA_DIR}"
 rm -f \
   "${EXTENSION_DIR}/metadata.json" \
-  "${EXTENSION_DIR}/extension.js" \
-  "${EXTENSION_DIR}/prefs.js" \
   "${EXTENSION_DIR}/bin/meeting-recorder"
+find "${EXTENSION_DIR}" -maxdepth 1 -type f -name '*.js' -delete
 cp "${ROOT_DIR}/build/extension/metadata.json" "${EXTENSION_DIR}/metadata.json"
-cp "${ROOT_DIR}/build/extension/extension.js" "${EXTENSION_DIR}/extension.js"
-cp "${ROOT_DIR}/build/extension/prefs.js" "${EXTENSION_DIR}/prefs.js"
+find "${ROOT_DIR}/build/extension" -maxdepth 1 -type f -name '*.js' \
+  -exec cp {} "${EXTENSION_DIR}/" \;
 cp "${ROOT_DIR}/backend/target/release/meeting-recorder" "${EXTENSION_DIR}/bin/meeting-recorder"
+install -m 0644 \
+  "${ROOT_DIR}/data/${SCHEMA_ID}.gschema.xml" \
+  "${SCHEMA_DIR}/${SCHEMA_ID}.gschema.xml"
+glib-compile-schemas --strict "${SCHEMA_DIR}"
 
 gnome-extensions enable "${UUID}" || true
 

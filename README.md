@@ -14,7 +14,7 @@ The recorder uses `wpctl` to find the default microphone and current default sys
 On Debian/Ubuntu-like systems, the `.deb` package declares the runtime dependencies. For source development, install the build tools and runtime commands:
 
 ```sh
-sudo apt install wireplumber ffmpeg gnome-shell
+sudo apt install wireplumber ffmpeg gnome-shell libglib2.0-bin libglib2.0-dev
 ```
 
 Install Rust/Cargo with `rustup` for development builds:
@@ -62,6 +62,15 @@ gnome-extensions enable meeting-recorder@timokuehne.com
 
 On GNOME Wayland, log out and back in after installing extension JavaScript or preferences changes. GNOME Shell does not reliably reload changed extension modules inside the same session. If the enable command says `Extension "meeting-recorder@timokuehne.com" does not exist`, log out and back in, then run the enable command again.
 
+The development backend installed inside the extension directory discovers the adjacent schema
+automatically. To run the backend directly through Cargo after a development install, provide that
+schema directory explicitly:
+
+```sh
+GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/meeting-recorder@timokuehne.com/schemas" \
+  cargo run --manifest-path backend/Cargo.toml -- status
+```
+
 ## Usage
 
 - Click the top bar icon to start or stop recording.
@@ -99,11 +108,8 @@ Commands:
 meeting-recorder start
 meeting-recorder stop
 meeting-recorder status
-meeting-recorder config get
-meeting-recorder config set-recordings-dir /absolute/path
-meeting-recorder config reset-recordings-dir
-meeting-recorder config set-post-transcribe-hook /absolute/path/to/executable
-meeting-recorder config clear-post-transcribe-hook
+meeting-recorder auth status xai
+meeting-recorder transcribe /path/to/recording.mp3 --provider xai
 ```
 
 State and logs are written under:
@@ -112,9 +118,27 @@ State and logs are written under:
 ~/.local/state/meeting-recorder
 ```
 
+## Settings
+
+Non-secret settings use the `com.timokuehne.meeting-recorder` GSettings schema. Preferences and
+the extension read and observe this schema directly. Scripts and agents can use the standard
+`gsettings` command:
+
+```sh
+gsettings list-recursively com.timokuehne.meeting-recorder
+gsettings set com.timokuehne.meeting-recorder transcription-provider xai
+gsettings set com.timokuehne.meeting-recorder recordings-directory '/absolute/path'
+gsettings set com.timokuehne.meeting-recorder meeting-detection-reminder-enabled false
+gsettings reset com.timokuehne.meeting-recorder recordings-directory
+```
+
+The provider choices are `disabled`, `xai`, and `deepgram`. An empty recordings directory uses
+`~/Recordings/Meetings`; resetting a key restores its schema default.
+
 ## Transcription
 
-API keys are stored in GNOME Keyring through the Secret Service API. They are not written to the recorder state or config files.
+API keys are stored in GNOME Keyring through the Secret Service API. They are not written to the
+recorder state or GSettings.
 
 Configure a provider from the extension menu:
 
@@ -127,13 +151,13 @@ Each provider also has a configurable Base URL. The defaults are `https://api.x.
 gateway can therefore be configured with, for example:
 
 ```bash
-meeting-recorder config set-provider-base-url xai https://ai.example.com/grok
+gsettings set com.timokuehne.meeting-recorder xai-base-url 'https://ai.example.com/grok'
 ```
 
 Reset it to the provider default with:
 
 ```bash
-meeting-recorder config reset-provider-base-url xai
+gsettings reset com.timokuehne.meeting-recorder xai-base-url
 ```
 
 For provider defaults, a key in GNOME Keyring is required. Custom Base URLs may supply credentials
@@ -150,12 +174,6 @@ meeting-recorder auth status deepgram
 ```
 
 For non-interactive callers, `auth set-stdin <provider>` reads the key from stdin.
-
-The provider selection, recordings folder, and optional post-transcribe hook are stored in:
-
-```text
-~/.config/meeting-recorder/config.json
-```
 
 Transcribe a recording:
 
@@ -179,7 +197,8 @@ Meeting Recorder can spawn one executable after a transcript has been written. T
 Configure it from `Preferences` or with:
 
 ```sh
-meeting-recorder config set-post-transcribe-hook /home/timo/.config/meeting-recorder/post-transcribe
+gsettings set com.timokuehne.meeting-recorder post-transcribe-hook \
+  '/home/timo/.config/meeting-recorder/post-transcribe'
 ```
 
 The hook receives context through environment variables:
