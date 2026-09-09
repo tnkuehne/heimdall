@@ -239,18 +239,18 @@ fn render_markdown(response: &Value) -> String {
 
     if let Some(turns) = deepgram_utterance_turns(response) {
         for turn in turns {
-            let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
+            write_turn(&mut markdown, turn);
         }
     } else if let Some(turns) = xai_diarized_turns(response) {
         for turn in turns {
-            let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
+            write_turn(&mut markdown, turn);
         }
     } else if let Some(text) = response.get("text").and_then(Value::as_str) {
         markdown.push_str(text.trim());
         markdown.push('\n');
     } else if let Some(turns) = transcript_turns(response) {
         for turn in turns {
-            let _ = writeln!(markdown, "**{}:** {}\n", turn.speaker, turn.text);
+            write_turn(&mut markdown, turn);
         }
     } else if is_empty_transcription(response) {
         markdown.push_str("_No speech was detected in this recording._\n");
@@ -265,6 +265,24 @@ fn render_markdown(response: &Value) -> String {
     markdown
 }
 
+fn write_turn(markdown: &mut String, turn: Turn) {
+    let _ = write!(markdown, "**");
+    if let Some(start) = turn
+        .start
+        .filter(|start| start.is_finite() && *start >= 0.0)
+    {
+        let seconds = start as u64;
+        let _ = write!(
+            markdown,
+            "[{:02}:{:02}:{:02}] ",
+            seconds / 3600,
+            seconds / 60 % 60,
+            seconds % 60
+        );
+    }
+    let _ = writeln!(markdown, "{}:** {}\n", turn.speaker, turn.text);
+}
+
 #[derive(Debug)]
 struct Word {
     speaker: String,
@@ -276,6 +294,7 @@ struct Word {
 #[derive(Debug)]
 struct Turn {
     speaker: String,
+    start: Option<f64>,
     text: String,
 }
 
@@ -382,6 +401,7 @@ fn deepgram_utterance_turns(response: &Value) -> Option<Vec<Turn>> {
 
         turns.push(Turn {
             speaker: deepgram_speaker(utterance),
+            start: utterance.get("start").and_then(Value::as_f64),
             text: text.to_string(),
         });
     }
@@ -456,6 +476,7 @@ fn words_to_turns(mut words: Vec<Word>) -> Option<Vec<Turn>> {
 
     let mut turns: Vec<Turn> = Vec::new();
     let mut current_speaker = words[0].speaker.clone();
+    let mut current_start = words[0].start;
     let mut current_end = words[0].end;
     let mut current_text = String::new();
 
@@ -465,6 +486,7 @@ fn words_to_turns(mut words: Vec<Word>) -> Option<Vec<Turn>> {
         if !same_turn && !current_text.is_empty() {
             turns.push(Turn {
                 speaker: current_speaker.clone(),
+                start: Some(current_start),
                 text: current_text.trim().to_string(),
             });
             current_text.clear();
@@ -472,6 +494,7 @@ fn words_to_turns(mut words: Vec<Word>) -> Option<Vec<Turn>> {
 
         if !same_turn {
             current_speaker = word.speaker;
+            current_start = word.start;
         }
 
         current_end = word.end;
@@ -481,6 +504,7 @@ fn words_to_turns(mut words: Vec<Word>) -> Option<Vec<Turn>> {
     if !current_text.is_empty() {
         turns.push(Turn {
             speaker: current_speaker,
+            start: Some(current_start),
             text: current_text.trim().to_string(),
         });
     }
