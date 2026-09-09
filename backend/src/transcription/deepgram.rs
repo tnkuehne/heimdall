@@ -4,6 +4,7 @@ use reqwest::blocking::Client;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
+use std::time::Duration;
 
 const DEFAULT_BASE_URL: &str = "https://api.deepgram.com";
 
@@ -40,11 +41,12 @@ impl TranscriptionProvider for DeepgramProvider {
         if let Some(language) = &request.language {
             query.push(("language", language.clone()));
         } else {
-            query.push(("detect_language", "true".to_string()));
+            query.push(("language", "multi".to_string()));
         }
 
         let mut request_builder = Client::new()
             .post(endpoint_url(base_url, "v1/listen")?)
+            .timeout(Duration::from_secs(30 * 60))
             .query(&query)
             .header(CONTENT_TYPE, "audio/mpeg")
             .body(audio);
