@@ -1,4 +1,5 @@
 import Gio from "gi://Gio";
+import GLib from "gi://GLib";
 
 import { MeetingRecorderClient } from "./dbus-client.js";
 
@@ -33,6 +34,19 @@ try {
 	assertEqual(client.recording, true, "recording property after start");
 	const cliStatus = JSON.parse(await runCli("status"));
 	assertEqual(cliStatus.recording, true, "CLI shared recording state");
+
+	const propertyChangesBeforeUnexpectedExit = propertyChanges;
+	await runProcess(["kill", "-KILL", String(recordingPid())]);
+	const unexpectedStatus = await waitForRecordingStatus(client, false);
+	assertEqual(
+		unexpectedStatus.message,
+		"recording process exited unexpectedly",
+		"unexpected exit status message",
+	);
+	await waitUntil(
+		() => propertyChanges > propertyChangesBeforeUnexpectedExit && !client.recording,
+		"property notification after GetStatus observes an external recorder exit",
+	);
 
 	const [firstStop, secondStop] = await Promise.all([
 		client.stopRecording(),
@@ -87,8 +101,12 @@ function startService() {
 }
 
 function runCli(command) {
+	return runProcess([executable, command]);
+}
+
+function runProcess(argv) {
 	const process = Gio.Subprocess.new(
-		[executable, command],
+		argv,
 		Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
 	);
 	return new Promise((resolve, reject) => {
@@ -103,6 +121,29 @@ function runCli(command) {
 			}
 		});
 	});
+}
+
+function recordingPid() {
+	const stateFile = Gio.File.new_for_path(
+		GLib.build_filenamev([GLib.get_user_state_dir(), "meeting-recorder", "state.json"]),
+	);
+	const [, contents] = stateFile.load_contents(null);
+	const state = JSON.parse(new TextDecoder().decode(contents));
+	if (!Number.isInteger(state.pid) || state.pid <= 0)
+		throw new Error(`Recording state has no valid pid: ${state.pid}`);
+	return state.pid;
+}
+
+async function waitForRecordingStatus(client, expected) {
+	let lastStatus = null;
+	for (let attempt = 0; attempt < 50; attempt += 1) {
+		lastStatus = await client.getStatus();
+		if (lastStatus.recording === expected) return lastStatus;
+		await delay(10);
+	}
+	throw new Error(
+		`Timed out waiting for recording=${expected}; last status was ${JSON.stringify(lastStatus)}`,
+	);
 }
 
 async function connectToService() {

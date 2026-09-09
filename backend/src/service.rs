@@ -32,19 +32,45 @@ enum ServiceError {
 #[derive(Clone)]
 struct RecordingCoordinator {
     gate: Arc<Mutex<()>>,
-    state: Arc<RwLock<RecordingState>>,
+    state: Arc<RwLock<CoordinatedRecordingState>>,
+}
+
+struct CoordinatedRecordingState {
+    current: RecordingState,
+    notification_pending: bool,
 }
 
 impl RecordingCoordinator {
     fn new(state: RecordingState) -> Self {
         Self {
             gate: Arc::new(Mutex::new(())),
-            state: Arc::new(RwLock::new(state)),
+            state: Arc::new(RwLock::new(CoordinatedRecordingState {
+                current: state,
+                notification_pending: false,
+            })),
         }
     }
 
     fn snapshot(&self) -> RecordingState {
-        read_lock(&self.state).clone()
+        read_lock(&self.state).current.clone()
+    }
+
+    fn pending_notification(&self) -> Option<RecordingState> {
+        let state = read_lock(&self.state);
+        state.notification_pending.then(|| state.current.clone())
+    }
+
+    fn mark_notification_published(&self, published: &RecordingState) {
+        let mut state = write_lock(&self.state);
+        if !recording_state_changed(published, &state.current) {
+            state.notification_pending = false;
+        }
+    }
+
+    fn replace_state(&self, current: RecordingState) {
+        let mut state = write_lock(&self.state);
+        state.notification_pending |= recording_state_changed(&state.current, &current);
+        state.current = current;
     }
 
     async fn refresh(&self) -> Result<RecordingState> {
@@ -67,7 +93,7 @@ impl RecordingCoordinator {
         blocking::unblock(move || {
             let _guard = mutex_lock(&coordinator.gate);
             let state = operation()?;
-            *write_lock(&coordinator.state) = state.clone();
+            coordinator.replace_state(state.clone());
             Ok(state)
         })
         .await
@@ -92,6 +118,17 @@ impl MeetingRecorderService {
         self.recording_changed(emitter).await?;
         self.recording_file_changed(emitter).await?;
         self.started_at_changed(emitter).await
+    }
+
+    async fn publish_pending_recording_changes(
+        &self,
+        emitter: &SignalEmitter<'_>,
+    ) -> zbus::Result<()> {
+        while let Some(published) = self.recordings.pending_notification() {
+            self.emit_recording_changes(emitter).await?;
+            self.recordings.mark_notification_published(&published);
+        }
+        Ok(())
     }
 
     fn start_automatic_transcription(
@@ -175,12 +212,16 @@ impl MeetingRecorderService {
 #[zbus::interface(interface = "com.timokuehne.MeetingRecorder1")]
 impl MeetingRecorderService {
     #[zbus(out_args("recording", "file", "started_at", "message"))]
-    async fn get_status(&self) -> Result<(bool, String, String, String), ServiceError> {
+    async fn get_status(
+        &self,
+        #[zbus(signal_emitter)] emitter: SignalEmitter<'_>,
+    ) -> Result<(bool, String, String, String), ServiceError> {
         let state = self
             .recordings
             .refresh()
             .await
             .map_err(ServiceError::operation)?;
+        self.publish_pending_recording_changes(&emitter).await?;
         Ok(status_tuple(&state))
     }
 
@@ -194,7 +235,7 @@ impl MeetingRecorderService {
             .start()
             .await
             .map_err(ServiceError::operation)?;
-        self.emit_recording_changes(&emitter).await?;
+        self.publish_pending_recording_changes(&emitter).await?;
         Ok((
             optional_path(&state.file),
             optional_string(&state.started_at),
@@ -212,7 +253,7 @@ impl MeetingRecorderService {
             .stop()
             .await
             .map_err(ServiceError::operation)?;
-        self.emit_recording_changes(&emitter).await?;
+        self.publish_pending_recording_changes(&emitter).await?;
 
         if let Some(audio_file) = state.file.clone() {
             self.start_automatic_transcription(audio_file, connection, emitter.to_owned());
@@ -454,15 +495,11 @@ fn spawn_recording_monitor(
             async move {
                 loop {
                     async_io::Timer::after(Duration::from_secs(1)).await;
-                    let previous = service.recordings.snapshot();
-                    match service.recordings.refresh().await {
-                        Ok(current) if recording_state_changed(&previous, &current) => {
-                            if let Err(error) = service.emit_recording_changes(&emitter).await {
-                                eprintln!("failed to publish recording state: {error}");
-                            }
-                        }
-                        Ok(_) => {}
-                        Err(error) => eprintln!("failed to refresh recording state: {error:#}"),
+                    if let Err(error) = service.recordings.refresh().await {
+                        eprintln!("failed to refresh recording state: {error:#}");
+                    }
+                    if let Err(error) = service.publish_pending_recording_changes(&emitter).await {
+                        eprintln!("failed to publish recording state: {error}");
                     }
                 }
             },
@@ -635,5 +672,29 @@ mod tests {
         let error = read_api_key(descriptor).unwrap_err();
         writer.join().unwrap();
         assert!(error.to_string().contains("exceeds the 64 KiB limit"));
+    }
+
+    #[test]
+    fn unchanged_refresh_cannot_consume_a_pending_recording_notification() {
+        let running = RecordingState {
+            recording: true,
+            pid: Some(42),
+            file: Some(PathBuf::from("recording.mp3")),
+            partial_file: Some(PathBuf::from("recording.part.mp3")),
+            started_at: Some("2026-09-09T12:00:00Z".to_owned()),
+            message: None,
+        };
+        let coordinator = RecordingCoordinator::new(running);
+        let stopped =
+            RecordingState::idle(Some("recording process exited unexpectedly".to_owned()));
+
+        coordinator.replace_state(stopped.clone());
+        coordinator.replace_state(stopped);
+
+        let pending = coordinator
+            .pending_notification()
+            .expect("the externally observed transition must remain pending");
+        coordinator.mark_notification_published(&pending);
+        assert!(coordinator.pending_notification().is_none());
     }
 }
