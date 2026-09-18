@@ -5,6 +5,7 @@ import Gtk from "gi://Gtk";
 
 import { ExtensionPreferences } from "resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js";
 
+import { MeetingRecorderClient } from "./dbus-client.js";
 import {
 	SETTINGS_KEYS,
 	SETTINGS_SCHEMA_ID,
@@ -23,11 +24,6 @@ const PROVIDER_OPTIONS: Array<TranscriptionProvider | null> = [
 	...TRANSCRIPTION_PROVIDERS.map((provider) => provider.id),
 ];
 
-type AuthStatus = {
-	provider: TranscriptionProvider;
-	configured: boolean;
-};
-
 type ProviderWidgets = {
 	group: Adw.PreferencesGroup;
 	baseUrlRow: Adw.EntryRow;
@@ -37,7 +33,8 @@ type ProviderWidgets = {
 };
 
 export default class MeetingRecorderPreferences extends ExtensionPreferences {
-	private _backendPath = "";
+	private readonly _serviceCancellable = new Gio.Cancellable();
+	private _client: MeetingRecorderClient | null = null;
 	private _settings: Gio.Settings | null = null;
 	private _providerRow: Adw.ComboRow | null = null;
 	private _meetingDetectionReminderRow: Adw.SwitchRow | null = null;
@@ -50,7 +47,6 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 	private _loadingMeetingDetectionReminder = false;
 
 	override fillPreferencesWindow(window: Adw.PreferencesWindow) {
-		this._backendPath = GLib.build_filenamev([this.path, "bin", "meeting-recorder"]);
 		this._settings = this.getSettings(SETTINGS_SCHEMA_ID);
 		window.set_title("Meeting Recorder");
 
@@ -190,7 +186,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 				show_apply_button: true,
 			});
 			row.connect("apply", () => {
-				this._saveApiKey(provider.id, row, providerGroup, removeButton, window);
+				void this._saveApiKey(provider.id, row, providerGroup, removeButton, window);
 			});
 
 			const removeButton = new Gtk.Button({
@@ -200,7 +196,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			});
 			removeButton.add_css_class("destructive-action");
 			removeButton.connect("clicked", () => {
-				this._deleteApiKey(provider.id, row, providerGroup, removeButton, window);
+				void this._deleteApiKey(provider.id, row, providerGroup, removeButton, window);
 			});
 			row.add_suffix(removeButton);
 			providerGroup.add(row);
@@ -219,28 +215,38 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			try {
 				this._applySettings();
 			} catch (error) {
-				this._showError(window, error);
+				this._showError(window, error instanceof Error ? error : new Error(String(error)));
 			}
 		});
-		this._load(window);
+		window.connect("destroy", () => this._serviceCancellable.cancel());
+		void this._load(window);
 	}
 
-	private _load(window: Adw.PreferencesWindow) {
+	private async _load(window: Adw.PreferencesWindow) {
 		try {
 			this._applySettings();
+			this._client = await MeetingRecorderClient.connect(this._serviceCancellable);
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
+			return;
 		}
 
 		for (const provider of TRANSCRIPTION_PROVIDERS) {
 			const widgets = this._providerWidgets.get(provider.id);
 			if (!widgets) continue;
 
-			this._runBackend<AuthStatus>(["auth", "status", provider.id])
-				.then((status) =>
-					this._applyAuthStatus(widgets.group, widgets.removeButton, status.configured),
-				)
-				.catch((error) => this._showGroupError(widgets.group, error));
+			try {
+				const configured = await this._requireClient().getApiKeyStatus(
+					provider.id,
+					this._serviceCancellable,
+				);
+				this._applyAuthStatus(widgets.group, widgets.removeButton, configured);
+			} catch (error) {
+				this._showGroupError(
+					widgets.group,
+					error instanceof Error ? error : new Error(String(error)),
+				);
+			}
 		}
 	}
 
@@ -307,7 +313,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, `Transcription provider: ${providerLabel(provider)}`);
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -322,7 +328,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, `${providerLabel(provider)} Base URL updated`);
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -332,7 +338,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, `${providerLabel(provider)} Base URL reset`);
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -349,7 +355,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, `Meeting reminders ${enabled ? "enabled" : "disabled"}`);
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -397,7 +403,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, "Recordings folder updated");
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -407,7 +413,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, "Recordings folder reset");
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -457,7 +463,7 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, "Post-transcribe hook updated");
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -467,11 +473,11 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			this._applySettings();
 			this._toast(window, "Post-transcribe hook cleared");
 		} catch (error) {
-			this._showError(window, error);
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
-	private _saveApiKey(
+	private async _saveApiKey(
 		provider: TranscriptionProvider,
 		row: Adw.PasswordEntryRow,
 		group: Adw.PreferencesGroup,
@@ -486,15 +492,16 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 			return;
 		}
 
-		this._runBackend<AuthStatus>(["auth", "set-stdin", provider], apiKey)
-			.then((status) => {
-				this._applyAuthStatus(group, removeButton, status.configured);
-				this._toast(window, `${providerLabel(provider)} API key saved`);
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			await this._requireClient().setApiKey(provider, apiKey, this._serviceCancellable);
+			this._applyAuthStatus(group, removeButton, true);
+			this._toast(window, `${providerLabel(provider)} API key saved`);
+		} catch (error) {
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
+		}
 	}
 
-	private _deleteApiKey(
+	private async _deleteApiKey(
 		provider: TranscriptionProvider,
 		row: Adw.PasswordEntryRow,
 		group: Adw.PreferencesGroup,
@@ -502,12 +509,13 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		window: Adw.PreferencesWindow,
 	) {
 		row.set_text("");
-		this._runBackend<AuthStatus>(["auth", "delete", provider])
-			.then((status) => {
-				this._applyAuthStatus(group, removeButton, status.configured);
-				this._toast(window, `${providerLabel(provider)} API key removed`);
-			})
-			.catch((error) => this._showError(window, error));
+		try {
+			await this._requireClient().deleteApiKey(provider, this._serviceCancellable);
+			this._applyAuthStatus(group, removeButton, false);
+			this._toast(window, `${providerLabel(provider)} API key removed`);
+		} catch (error) {
+			this._showError(window, error instanceof Error ? error : new Error(String(error)));
+		}
 	}
 
 	private _applyAuthStatus(
@@ -530,57 +538,22 @@ export default class MeetingRecorderPreferences extends ExtensionPreferences {
 		throw new Error("Meeting Recorder settings are unavailable");
 	}
 
-	private _showGroupError(group: Adw.PreferencesGroup, error: unknown) {
-		group.set_description(errorMessage(error));
+	private _requireClient() {
+		if (this._client?.available) return this._client;
+		throw new Error("Meeting Recorder service is unavailable");
 	}
 
-	private async _runBackend<T>(args: string[], stdin: string | null = null): Promise<T> {
-		const flags =
-			stdin === null
-				? Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE
-				: Gio.SubprocessFlags.STDIN_PIPE |
-					Gio.SubprocessFlags.STDOUT_PIPE |
-					Gio.SubprocessFlags.STDERR_PIPE;
-		const proc = Gio.Subprocess.new([this._backendPath, ...args], flags);
-		const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc, stdin);
-		const stdout = stdoutBytes ?? "";
-		const stderr = stderrBytes ?? "";
-
-		if (!proc.get_successful()) {
-			const detail =
-				stderr.trim() || stdout.trim() || `exit status ${proc.get_exit_status()}`;
-			throw new Error(detail);
-		}
-
-		try {
-			return JSON.parse(stdout) as T;
-		} catch {
-			throw new Error(`invalid backend response: ${stdout}`);
-		}
+	private _showGroupError(group: Adw.PreferencesGroup, error: Error) {
+		group.set_description(error.message);
 	}
 
-	private _showError(window: Adw.PreferencesWindow, error: unknown) {
-		this._toast(window, errorMessage(error));
+	private _showError(window: Adw.PreferencesWindow, error: Error) {
+		this._toast(window, error.message);
 	}
 
 	private _toast(window: Adw.PreferencesWindow, title: string) {
 		window.add_toast(new Adw.Toast({ title }));
 	}
-}
-
-function communicateUtf8(
-	proc: Gio.Subprocess,
-	stdin: string | null,
-): Promise<[boolean, string, string]> {
-	return new Promise((resolve, reject) => {
-		proc.communicate_utf8_async(stdin, null, (_source, result) => {
-			try {
-				resolve(proc.communicate_utf8_finish(result));
-			} catch (error) {
-				reject(error);
-			}
-		});
-	});
 }
 
 function providerIndex(provider: TranscriptionProvider | null) {
@@ -601,8 +574,4 @@ function normalizeBaseUrl(value: string) {
 		throw new Error("Base URL must not contain a query or fragment");
 
 	return normalized;
-}
-
-function errorMessage(error: unknown) {
-	return error instanceof Error ? error.message : String(error);
 }

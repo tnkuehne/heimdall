@@ -10,6 +10,7 @@ import * as MessageTray from "resource:///org/gnome/shell/ui/messageTray.js";
 import * as PanelMenu from "resource:///org/gnome/shell/ui/panelMenu.js";
 import * as PopupMenu from "resource:///org/gnome/shell/ui/popupMenu.js";
 
+import { MeetingRecorderClient, type GetStatusResult } from "./dbus-client.js";
 import {
 	SETTINGS_KEYS,
 	SETTINGS_SCHEMA_ID,
@@ -26,7 +27,6 @@ Gio._promisify(
 	"app_info_launch_default_for_uri_finish",
 );
 
-const STATUS_INTERVAL_SECONDS = 2;
 const MEETING_REMINDER_COOLDOWN_SECONDS = 10 * 60;
 const GOOGLE_MEET_TITLE_MARKERS = ["google meet", "meet - google chrome"] as const;
 const GOOGLE_MEET_URL_MARKER = "meet.google.com";
@@ -37,58 +37,16 @@ const CHROME_PWA_APP_ID_PREFIX = "chrome-";
 const FLATPAK_CHROME_APP_ID_PREFIX = "com.google.chrome";
 const DESKTOP_APP_ID_SUFFIX = ".desktop";
 
-type BackendStatus = {
-	recording: boolean;
-	pid: number | null;
-	file: string | null;
-	partial_file: string | null;
-	started_at: string | null;
-	message: string | null;
-};
-
-type TranscriptionSummary = {
-	provider: TranscriptionProvider;
-	audio_file: string;
-	transcript_file: string;
-	text: string | null;
-	duration: number | null;
-	post_transcribe_hook_error: string | null;
-};
-
-type CaptureStateEvent = {
-	type: "capture-state";
-	browser_audio_capture: boolean;
-	browser_video_capture: boolean;
-	browser_capture: boolean;
-};
-
 class MeetingRecorderExtension extends Extension {
-	backendPath = "";
 	private _indicator: MeetingRecorderIndicator | null = null;
-	private _timeoutId: number | null = null;
 
 	override enable() {
-		this.backendPath = GLib.build_filenamev([this.path, "bin", "meeting-recorder"]);
 		this._indicator = new MeetingRecorderIndicator(this, this.getSettings(SETTINGS_SCHEMA_ID));
 		Main.panel.addToStatusArea(this.uuid, this._indicator.button);
-
-		void this._indicator.refresh();
-		this._timeoutId = GLib.timeout_add_seconds(
-			GLib.PRIORITY_DEFAULT,
-			STATUS_INTERVAL_SECONDS,
-			() => {
-				void this._indicator?.refresh();
-				return GLib.SOURCE_CONTINUE;
-			},
-		);
+		void this._indicator.initialize();
 	}
 
 	override disable() {
-		if (this._timeoutId !== null) {
-			GLib.Source.remove(this._timeoutId);
-			this._timeoutId = null;
-		}
-
 		this._indicator?.destroy();
 		this._indicator = null;
 	}
@@ -100,6 +58,7 @@ class MeetingRecorderIndicator {
 	private readonly _extension: MeetingRecorderExtension;
 	private readonly _settings: Gio.Settings;
 	private readonly _settingsChangedSignalId: number;
+	private readonly _serviceCancellable = new Gio.Cancellable();
 	private readonly _menu: PopupMenu.PopupMenu;
 	private readonly _icon: St.Icon;
 	private readonly _toggleItem: PopupMenu.PopupMenuItem;
@@ -110,8 +69,8 @@ class MeetingRecorderIndicator {
 	private readonly _providerDisabledItem: PopupMenu.PopupMenuItem;
 	private readonly _providerItems = new Map<TranscriptionProvider, PopupMenu.PopupMenuItem>();
 	private _notificationSource: MessageTray.Source | null = null;
-	private _captureMonitor: Gio.Subprocess | null = null;
-	private _captureMonitorCancellable: Gio.Cancellable | null = null;
+	private _client: MeetingRecorderClient | null = null;
+	private readonly _clientSignalIds: number[] = [];
 	private _focusedWindow: Meta.Window | null = null;
 	private _focusedWindowTitleSignalId: number | null = null;
 	private _focusWindowSignalId: number | null = null;
@@ -119,7 +78,6 @@ class MeetingRecorderIndicator {
 	private _lastMeetingReminderAt = 0;
 	private _recording = false;
 	private _lastFile: string | null = null;
-	private _transcriptionProvider: TranscriptionProvider | null = null;
 	private _meetingDetectionReminderEnabled = true;
 
 	constructor(extension: MeetingRecorderExtension, settings: Gio.Settings) {
@@ -170,7 +128,6 @@ class MeetingRecorderIndicator {
 			this._applySetting(key);
 		});
 		this._applySettings();
-		this._startCaptureMonitor();
 		this._watchFocusedWindow();
 		this._focusWindowSignalId = global.display.connect("notify::focus-window", () => {
 			this._watchFocusedWindow();
@@ -178,48 +135,109 @@ class MeetingRecorderIndicator {
 	}
 
 	destroy() {
+		this._serviceCancellable.cancel();
+		if (this._client)
+			for (const signalId of this._clientSignalIds) this._client.disconnect(signalId);
+		this._clientSignalIds.length = 0;
+		this._client = null;
 		this._settings.disconnect(this._settingsChangedSignalId);
 		if (this._focusWindowSignalId !== null) {
 			global.display.disconnect(this._focusWindowSignalId);
 			this._focusWindowSignalId = null;
 		}
 		this._disconnectFocusedWindow();
-		this._stopCaptureMonitor();
 		this._notificationSource?.destroy(MessageTray.NotificationDestroyedReason.SOURCE_CLOSED);
 		this._notificationSource = null;
 		this.button.destroy();
 	}
 
-	async refresh() {
+	async initialize() {
 		try {
-			const status = await this._runBackend<BackendStatus>(["status"]);
+			const client = await MeetingRecorderClient.connect(this._serviceCancellable);
+			if (this._serviceCancellable.is_cancelled()) return;
+
+			this._client = client;
+			this._clientSignalIds.push(
+				client.connectPropertiesChanged(() => this._handlePropertiesChanged()),
+				client.connectAvailabilityChanged(() => {
+					void this._handleAvailabilityChanged();
+				}),
+				client.connectTranscriptionCompleted((_audioFile, transcriptFile, hookError) => {
+					this._notifyTranscriptSaved(transcriptFile);
+					if (hookError) this._notifyError(new Error(hookError));
+				}),
+				client.connectTranscriptionFailed((_audioFile, message) => {
+					this._notifyError(new Error(message));
+				}),
+			);
+			this._applyServiceProperties();
+			const status = await client.getStatus(this._serviceCancellable);
 			this._applyStatus(status);
 		} catch (error) {
+			if (this._serviceCancellable.is_cancelled()) return;
 			this._recording = false;
 			this._setUi(false, "Recorder unavailable", "Start Recording");
-			logUnknownError(error, "Meeting Recorder status refresh");
+			logError(
+				error instanceof Error ? error : new Error(String(error)),
+				"Meeting Recorder service connection",
+			);
+		}
+	}
+
+	private _handlePropertiesChanged() {
+		try {
+			this._applyServiceProperties();
+		} catch (error) {
+			if (!this._serviceCancellable.is_cancelled())
+				this._notifyError(error instanceof Error ? error : new Error(String(error)));
+		}
+	}
+
+	private async _handleAvailabilityChanged() {
+		const client = this._client;
+		if (!client?.available) {
+			this._recording = false;
+			this._setUi(false, "Recorder unavailable", "Start Recording");
+			return;
+		}
+
+		try {
+			this._applyServiceProperties();
+			this._applyStatus(await client.getStatus(this._serviceCancellable));
+		} catch (error) {
+			if (!this._serviceCancellable.is_cancelled())
+				this._notifyError(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
 	private async _toggleRecording() {
 		try {
-			const result = await this._runBackend<BackendStatus>([
-				this._recording ? "stop" : "start",
-			]);
-			this._applyStatus(result);
-
-			if (result.recording) Main.notify("Meeting Recorder", "Recording started");
-			else if (result.file) {
-				this._notifyRecordingSaved(result.file);
-				this._autoTranscribe(result.file);
+			const client = this._requireClient();
+			if (this._recording) {
+				const file = await client.stopRecording(this._serviceCancellable);
+				this._applyServiceProperties();
+				if (file) {
+					this._lastFile = file;
+					this._notifyRecordingSaved(file);
+					const provider = transcriptionProvider(this._settings);
+					if (provider)
+						Main.notify(
+							"Meeting Recorder",
+							`Transcribing with ${providerLabel(provider)}`,
+						);
+				}
+			} else {
+				await client.startRecording(this._serviceCancellable);
+				this._applyServiceProperties();
+				Main.notify("Meeting Recorder", "Recording started");
 			}
 		} catch (error) {
-			this._notifyError(error);
+			this._notifyError(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
-	private _applyStatus(status: BackendStatus) {
-		this._recording = Boolean(status.recording);
+	private _applyStatus(status: GetStatusResult) {
+		this._recording = status.recording;
 		if (status.file) this._lastFile = status.file;
 
 		if (this._recording) {
@@ -237,35 +255,33 @@ class MeetingRecorderIndicator {
 		else this._setUi(false, "Not recording", "Start Recording");
 	}
 
+	private _applyServiceProperties() {
+		const client = this._requireClient();
+		this._recording = client.recording;
+		if (client.recordingFile) this._lastFile = client.recordingFile;
+		this._browserCaptureActive = client.browserAudioCapture || client.browserVideoCapture;
+		this._setUi(
+			this._recording,
+			this._recording
+				? "Recording"
+				: this._lastFile
+					? `Last: ${GLib.path_get_basename(this._lastFile)}`
+					: "Not recording",
+			this._recording ? "Stop Recording" : "Start Recording",
+		);
+		this._maybeNotifyMeetingDetected();
+	}
+
+	private _requireClient() {
+		if (this._client?.available) return this._client;
+		throw new Error("Meeting Recorder service is unavailable");
+	}
+
 	private _setUi(recording: boolean, statusText: string, toggleText: string) {
 		this._icon.icon_name = recording ? "media-playback-stop-symbolic" : "media-record-symbolic";
 		this._icon.style = recording ? "color: #ff4d4d;" : "";
 		this._statusItem.label.text = statusText;
 		this._toggleItem.label.text = toggleText;
-	}
-
-	private async _runBackend<T>(args: string[]): Promise<T> {
-		const argv = [this._extension.backendPath, ...args];
-		const proc = Gio.Subprocess.new(
-			argv,
-			Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_PIPE,
-		);
-
-		const [, stdoutBytes, stderrBytes] = await communicateUtf8(proc);
-		const stdout = stdoutBytes ?? "";
-		const stderr = stderrBytes ?? "";
-
-		if (!proc.get_successful()) {
-			const detail =
-				stderr.trim() || stdout.trim() || `exit status ${proc.get_exit_status()}`;
-			throw new Error(detail);
-		}
-
-		try {
-			return JSON.parse(stdout) as T;
-		} catch {
-			throw new Error(`invalid backend response: ${stdout}`);
-		}
 	}
 
 	private _requirePopupMenu(
@@ -311,7 +327,7 @@ class MeetingRecorderIndicator {
 			const uri = Gio.File.new_for_path(directory).get_uri();
 			await Gio.app_info_launch_default_for_uri_async(uri, null, null);
 		} catch (error) {
-			this._notifyError(error);
+			this._notifyError(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
@@ -321,12 +337,11 @@ class MeetingRecorderIndicator {
 			if (!this._settings.set_string(SETTINGS_KEYS.transcriptionProvider, value))
 				throw new Error("Transcription provider setting is not writable");
 		} catch (error) {
-			this._notifyError(error);
+			this._notifyError(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
 	private _applyTranscriptionProvider(provider: TranscriptionProvider | null) {
-		this._transcriptionProvider = provider;
 		this._providerSubmenu.label.text = `Transcription: ${providerLabel(provider)}`;
 		this._providerDisabledItem.setOrnament(
 			provider === null ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE,
@@ -335,20 +350,6 @@ class MeetingRecorderIndicator {
 			item.setOrnament(
 				provider === providerId ? PopupMenu.Ornament.CHECK : PopupMenu.Ornament.NONE,
 			);
-	}
-
-	private _autoTranscribe(file: string) {
-		const provider = this._transcriptionProvider;
-		if (provider === null) return;
-
-		Main.notify("Meeting Recorder", `Transcribing with ${providerLabel(provider)}`);
-		this._runBackend<TranscriptionSummary>(["transcribe", file, "--provider", provider])
-			.then((summary) => {
-				this._notifyTranscriptSaved(summary.transcript_file);
-				if (summary.post_transcribe_hook_error)
-					this._notifyError(new Error(summary.post_transcribe_hook_error));
-			})
-			.catch((error) => this._notifyError(error));
 	}
 
 	private _watchFocusedWindow() {
@@ -416,70 +417,6 @@ class MeetingRecorderIndicator {
 		source.addNotification(notification);
 	}
 
-	private _startCaptureMonitor() {
-		try {
-			this._captureMonitorCancellable = new Gio.Cancellable();
-			this._captureMonitor = Gio.Subprocess.new(
-				[this._extension.backendPath, "monitor-capture"],
-				Gio.SubprocessFlags.STDOUT_PIPE | Gio.SubprocessFlags.STDERR_SILENCE,
-			);
-
-			const stdout = this._captureMonitor.get_stdout_pipe();
-			if (!stdout) throw new Error("capture monitor started without stdout pipe");
-
-			this._readCaptureMonitorLine(Gio.DataInputStream.new(stdout));
-			this._captureMonitor.wait_check_async(
-				this._captureMonitorCancellable,
-				(_proc, result) => {
-					try {
-						this._captureMonitor?.wait_check_finish(result);
-					} catch (error) {
-						if (!this._captureMonitorCancellable?.is_cancelled())
-							this._notifyError(error);
-					}
-				},
-			);
-		} catch (error) {
-			this._notifyError(error);
-		}
-	}
-
-	private _stopCaptureMonitor() {
-		this._captureMonitorCancellable?.cancel();
-		this._captureMonitorCancellable = null;
-		this._captureMonitor?.force_exit();
-		this._captureMonitor = null;
-		this._browserCaptureActive = false;
-	}
-
-	private _readCaptureMonitorLine(stream: Gio.DataInputStream) {
-		const cancellable = this._captureMonitorCancellable;
-		if (!cancellable) return;
-
-		stream.read_line_async(GLib.PRIORITY_DEFAULT, cancellable, (_source, result) => {
-			try {
-				const [line] = stream.read_line_finish_utf8(result);
-				if (line === null) return;
-
-				this._handleCaptureMonitorLine(line);
-				this._readCaptureMonitorLine(stream);
-			} catch (error) {
-				if (!cancellable.is_cancelled()) this._notifyError(error);
-			}
-		});
-	}
-
-	private _handleCaptureMonitorLine(line: string) {
-		const event = JSON.parse(line) as CaptureStateEvent;
-		if (event.type !== "capture-state") return;
-
-		const captureActive = Boolean(event.browser_capture);
-		if (this._browserCaptureActive === captureActive) return;
-
-		this._browserCaptureActive = captureActive;
-		this._maybeNotifyMeetingDetected();
-	}
-
 	private _startRecordingFromReminder() {
 		if (!this._recording) void this._toggleRecording();
 	}
@@ -536,36 +473,14 @@ class MeetingRecorderIndicator {
 			const uri = Gio.File.new_for_path(folder).get_uri();
 			Gio.AppInfo.launch_default_for_uri(uri, null);
 		} catch (error) {
-			this._notifyError(error);
+			this._notifyError(error instanceof Error ? error : new Error(String(error)));
 		}
 	}
 
-	private _notifyError(error: unknown) {
-		const message = error instanceof Error ? error.message : String(error);
-		logUnknownError(error, "Meeting Recorder");
-		Main.notifyError("Meeting Recorder", message);
+	private _notifyError(error: Error) {
+		logError(error, "Meeting Recorder");
+		Main.notifyError("Meeting Recorder", error.message);
 	}
-}
-
-function communicateUtf8(proc: Gio.Subprocess): Promise<[boolean, string, string]> {
-	return new Promise((resolve, reject) => {
-		proc.communicate_utf8_async(null, null, (_source, result) => {
-			try {
-				resolve(proc.communicate_utf8_finish(result));
-			} catch (error) {
-				reject(error);
-			}
-		});
-	});
-}
-
-function logUnknownError(error: unknown, context: string) {
-	if (error instanceof Error) {
-		logError(error, context);
-		return;
-	}
-
-	logError(new Error(String(error)), context);
 }
 
 function isRelevantMeetingWindow(title: string, appId: string) {

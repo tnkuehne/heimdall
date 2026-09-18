@@ -12,6 +12,9 @@ STAGE_DIR="${OUT_DIR}/stage"
 DEB_PATH="${OUT_DIR}/${PACKAGE}_${VERSION}_${ARCH}.deb"
 EXTENSION_DIR="${STAGE_DIR}/usr/share/gnome-shell/extensions/${UUID}"
 SCHEMA_DIR="${STAGE_DIR}/usr/share/glib-2.0/schemas"
+DBUS_SERVICE_DIR="${STAGE_DIR}/usr/share/dbus-1/services"
+DBUS_INTERFACE_DIR="${STAGE_DIR}/usr/share/dbus-1/interfaces"
+SYSTEMD_USER_DIR="${STAGE_DIR}/usr/lib/systemd/user"
 
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -36,8 +39,11 @@ mkdir -p \
   "${STAGE_DIR}/DEBIAN" \
   "${EXTENSION_DIR}/bin" \
   "${STAGE_DIR}/usr/bin" \
+  "${DBUS_SERVICE_DIR}" \
+  "${DBUS_INTERFACE_DIR}" \
   "${STAGE_DIR}/usr/share/doc/${PACKAGE}" \
-  "${SCHEMA_DIR}"
+  "${SCHEMA_DIR}" \
+  "${SYSTEMD_USER_DIR}"
 
 install -m 0644 "${ROOT_DIR}/build/extension/metadata.json" "${EXTENSION_DIR}/metadata.json"
 find "${ROOT_DIR}/build/extension" -maxdepth 1 -type f -name '*.js' \
@@ -47,6 +53,15 @@ install -m 0644 "${ROOT_DIR}/README.md" "${STAGE_DIR}/usr/share/doc/${PACKAGE}/R
 install -m 0644 \
   "${ROOT_DIR}/data/${SCHEMA_ID}.gschema.xml" \
   "${SCHEMA_DIR}/${SCHEMA_ID}.gschema.xml"
+install -m 0644 \
+  "${ROOT_DIR}/data/com.timokuehne.MeetingRecorder1.xml" \
+  "${DBUS_INTERFACE_DIR}/com.timokuehne.MeetingRecorder1.xml"
+sed 's|@EXECUTABLE@|/usr/bin/meeting-recorder|g' \
+  "${ROOT_DIR}/data/com.timokuehne.MeetingRecorder1.service.in" \
+  >"${DBUS_SERVICE_DIR}/com.timokuehne.MeetingRecorder1.service"
+sed 's|@EXECUTABLE@|/usr/bin/meeting-recorder|g' \
+  "${ROOT_DIR}/data/meeting-recorder.service.in" \
+  >"${SYSTEMD_USER_DIR}/meeting-recorder.service"
 ln -s "../share/gnome-shell/extensions/${UUID}/bin/meeting-recorder" "${STAGE_DIR}/usr/bin/meeting-recorder"
 
 cat >"${STAGE_DIR}/DEBIAN/control" <<EOF
@@ -56,7 +71,7 @@ Section: gnome
 Priority: optional
 Architecture: ${ARCH}
 Maintainer: Timo Kühne <contact@timokuehne.com>
-Depends: ffmpeg, wireplumber, gnome-shell (>= 46), libglib2.0-bin, libc6, libgcc-s1
+Depends: dbus-user-session, ffmpeg, wireplumber, gnome-shell (>= 46), libglib2.0-bin, libc6, libgcc-s1
 Homepage: https://timokuehne.com
 Description: GNOME Shell meeting recorder
  Records the default microphone and current system audio from the GNOME top bar.

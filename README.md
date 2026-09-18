@@ -1,6 +1,6 @@
 # Meeting Recorder
 
-GNOME Shell extension plus Rust backend for recording meetings from the top bar.
+GNOME Shell extension plus a native Rust D-Bus service for recording meetings from the top bar.
 
 The recorder uses `wpctl` to find the default microphone and current default system output, captures them through `ffmpeg`'s Pulse-compatible PipeWire path, and writes a stereo MP3 file with microphone audio on the left channel and system audio on the right channel.
 
@@ -63,12 +63,21 @@ gnome-extensions enable meeting-recorder@timokuehne.com
 On GNOME Wayland, log out and back in after installing extension JavaScript or preferences changes. GNOME Shell does not reliably reload changed extension modules inside the same session. If the enable command says `Extension "meeting-recorder@timokuehne.com" does not exist`, log out and back in, then run the enable command again.
 
 The development backend installed inside the extension directory discovers the adjacent schema
-automatically. To run the backend directly through Cargo after a development install, provide that
-schema directory explicitly:
+automatically. To run the service directly through Cargo, stop the installed development service
+and provide its schema directory explicitly:
 
 ```sh
+systemctl --user stop meeting-recorder.service
 GSETTINGS_SCHEMA_DIR="$HOME/.local/share/gnome-shell/extensions/meeting-recorder@timokuehne.com/schemas" \
-  cargo run --manifest-path backend/Cargo.toml -- status
+  cargo run --manifest-path backend/Cargo.toml -- service
+```
+
+The development installer also installs and starts `meeting-recorder.service` as a systemd user
+service. Restart it after stopping any active recording to load backend changes:
+
+```sh
+systemctl --user restart meeting-recorder.service
+journalctl --user --unit meeting-recorder.service
 ```
 
 ## Usage
@@ -90,7 +99,8 @@ next to the audio file.
 
 ## Backend
 
-The `.deb` installs the Rust CLI on `PATH`:
+The `.deb` installs the Rust CLI on `PATH`. `start`, `stop`, and `status` call the same D-Bus
+service used by the extension, so every client observes and controls one recording state:
 
 ```text
 /usr/bin/meeting-recorder
@@ -116,6 +126,14 @@ State and logs are written under:
 
 ```text
 ~/.local/state/meeting-recorder
+```
+
+The service is activated on demand on the user's session bus. Inspect its public interface with:
+
+```sh
+gdbus introspect --session \
+  --dest com.timokuehne.MeetingRecorder1 \
+  --object-path /com/timokuehne/MeetingRecorder1
 ```
 
 ## Settings
@@ -221,11 +239,26 @@ The GNOME Shell source of truth is TypeScript:
 extension/extension.ts
 ```
 
+The D-Bus XML is the source of truth for the desktop-service contract. Regenerate the checked-in
+GJS client after changing it:
+
+```sh
+pnpm run dbus:generate
+```
+
 Build the generated extension JavaScript with:
 
 ```sh
 pnpm install
 pnpm run build
+```
+
+Run static checks and the isolated GJS↔D-Bus integration test with:
+
+```sh
+pnpm run check
+pnpm run check:integration
+cargo test --manifest-path backend/Cargo.toml
 ```
 
 Generated GNOME Shell files are written to `build/extension` and should not be committed.
@@ -244,4 +277,5 @@ The package is written to:
 build/deb/meeting-recorder_<version>_<architecture>.deb
 ```
 
-GitHub Actions builds the `.deb` on every push to `main`. A version change creates a draft release, and publishing its tag uploads the package to that release.
+GitHub Actions builds the `.deb` for pull requests and pushes to `main`. A version change creates a
+draft release, and publishing its tag uploads the package to that release.

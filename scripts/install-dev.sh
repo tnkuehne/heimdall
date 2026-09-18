@@ -6,6 +6,8 @@ UUID="meeting-recorder@timokuehne.com"
 EXTENSION_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
 SCHEMA_ID="com.timokuehne.meeting-recorder"
 SCHEMA_DIR="${EXTENSION_DIR}/schemas"
+DBUS_SERVICE_DIR="${HOME}/.local/share/dbus-1/services"
+SYSTEMD_USER_DIR="${HOME}/.config/systemd/user"
 
 need() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -21,6 +23,7 @@ need gnome-extensions
 need glib-compile-schemas
 need pkg-config
 need pnpm
+need systemctl
 
 if ! pkg-config --exists gio-2.0; then
   echo "Missing GIO development files. On Debian/Ubuntu, install libglib2.0-dev." >&2
@@ -32,7 +35,7 @@ CI=true pnpm install --frozen-lockfile
 pnpm run build
 cargo build --release --manifest-path "${ROOT_DIR}/backend/Cargo.toml"
 
-mkdir -p "${EXTENSION_DIR}/bin" "${SCHEMA_DIR}"
+mkdir -p "${EXTENSION_DIR}/bin" "${SCHEMA_DIR}" "${DBUS_SERVICE_DIR}" "${SYSTEMD_USER_DIR}"
 rm -f \
   "${EXTENSION_DIR}/metadata.json" \
   "${EXTENSION_DIR}/bin/meeting-recorder"
@@ -45,6 +48,19 @@ install -m 0644 \
   "${ROOT_DIR}/data/${SCHEMA_ID}.gschema.xml" \
   "${SCHEMA_DIR}/${SCHEMA_ID}.gschema.xml"
 glib-compile-schemas --strict "${SCHEMA_DIR}"
+sed "s|@EXECUTABLE@|${EXTENSION_DIR}/bin/meeting-recorder|g" \
+  "${ROOT_DIR}/data/com.timokuehne.MeetingRecorder1.service.in" \
+  >"${DBUS_SERVICE_DIR}/com.timokuehne.MeetingRecorder1.service"
+sed "s|@EXECUTABLE@|${EXTENSION_DIR}/bin/meeting-recorder|g" \
+  "${ROOT_DIR}/data/meeting-recorder.service.in" \
+  >"${SYSTEMD_USER_DIR}/meeting-recorder.service"
+systemctl --user daemon-reload
+
+if systemctl --user is-active --quiet meeting-recorder.service; then
+  echo "Meeting Recorder service is already running; restart it after stopping any active recording."
+else
+  systemctl --user start meeting-recorder.service
+fi
 
 gnome-extensions enable "${UUID}" || true
 

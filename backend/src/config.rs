@@ -8,6 +8,7 @@ pub const SCHEMA_ID: &str = "com.timokuehne.meeting-recorder";
 
 const XAI_BASE_URL_KEY: &str = "xai-base-url";
 const DEEPGRAM_BASE_URL_KEY: &str = "deepgram-base-url";
+const TRANSCRIPTION_PROVIDER_KEY: &str = "transcription-provider";
 const RECORDINGS_DIRECTORY_KEY: &str = "recordings-directory";
 const POST_TRANSCRIBE_HOOK_KEY: &str = "post-transcribe-hook";
 
@@ -38,6 +39,17 @@ pub fn provider_base_url(provider: &str, default_base_url: &str) -> Result<Provi
         is_custom: value != default,
         value,
     })
+}
+
+pub fn transcription_provider() -> Result<Option<&'static str>> {
+    match read_string(TRANSCRIPTION_PROVIDER_KEY)?.as_str() {
+        "disabled" => Ok(None),
+        "xai" => Ok(Some("xai")),
+        "deepgram" => Ok(Some("deepgram")),
+        provider => bail!(
+            "GSettings key {TRANSCRIPTION_PROVIDER_KEY} contains an unsupported provider: {provider}"
+        ),
+    }
 }
 
 pub fn recordings_dir() -> Result<PathBuf> {
