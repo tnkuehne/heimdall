@@ -1,0 +1,37 @@
+#!/usr/bin/env python3
+"""Start a T3 meeting review using Heimdall's transcript path."""
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('transcript', nargs='?', default=os.environ.get('MEETING_RECORDER_TRANSCRIPT_FILE'))
+parser.add_argument('--config', type=Path, default=Path(__file__).with_name('config.json'))
+parser.add_argument('--dry-run', action='store_true', help='Print the prompt without starting T3')
+args = parser.parse_args()
+if not args.transcript:
+    parser.error('Pass a transcript path or set MEETING_RECORDER_TRANSCRIPT_FILE')
+
+config = json.loads(args.config.expanduser().read_text(encoding='utf-8'))
+project = Path(config['project_path']).expanduser().resolve(strict=True)
+transcript = Path(args.transcript).expanduser().resolve(strict=True)
+if not transcript.is_file():
+    parser.error('Transcript must be a file')
+context = {
+    'project_path': str(project),
+    'notes_directory': config.get('notes_directory', 'meetings'),
+    'transcript_path': str(transcript),
+    'audio_path': os.environ.get('MEETING_RECORDER_AUDIO_FILE'),
+}
+prompt = Path(__file__).with_name('meeting-prompt.md').read_text(encoding='utf-8')
+prompt = prompt.replace('{{CONTEXT}}', json.dumps(context, ensure_ascii=False, indent=2))
+if args.dry_run:
+    print(prompt)
+else:
+    subprocess.run(
+        [os.path.expanduser(config.get('t3_binary', '~/.t3/bin/t3')),
+         'thread', 'start', '--title', f'Meeting review: {transcript.stem}', str(project), '-'],
+        input=prompt, text=True, encoding='utf-8', cwd=project, check=True,
+    )
