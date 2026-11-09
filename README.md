@@ -236,9 +236,8 @@ MEETING_RECORDER_CHANNELS=2
 The [T3 meeting-review hook](examples/t3-meeting-review/README.md) starts a chat in
 your notes project after transcription. The agent asks about missing details,
 prepares a note with the original transcript, and asks for your approval before
-committing and pushing it. The example includes a configurable prompt, duplicate
-launch protection, local logs, and tests. The hook itself does not edit notes or
-run Git commands.
+committing and pushing it. Customize the supplied prompt for your notes workflow.
+The hook itself only starts the chat.
 
 ## Development
 

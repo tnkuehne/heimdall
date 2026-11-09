@@ -1,165 +1,39 @@
 #!/usr/bin/env python3
-"""Open an interactive T3 meeting review; never edit notes, commit, or push here."""
+"""Start a T3 meeting review using Heimdall's transcript path."""
 import argparse
-import contextlib
-import datetime
-import fcntl
-import hashlib
 import json
 import os
 from pathlib import Path
 import subprocess
-import sys
 
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('transcript', nargs='?', default=os.environ.get('MEETING_RECORDER_TRANSCRIPT_FILE'))
+parser.add_argument('--config', type=Path, default=Path(__file__).with_name('config.json'))
+parser.add_argument('--dry-run', action='store_true', help='Print the prompt without starting T3')
+args = parser.parse_args()
+if not args.transcript:
+    parser.error('Pass a transcript path or set MEETING_RECORDER_TRANSCRIPT_FILE')
 
-def save_state(path, state):
-    temporary = path.with_suffix('.tmp')
-    temporary.write_text(json.dumps(state, ensure_ascii=False, indent=2) + '\n', encoding='utf-8')
-    temporary.chmod(0o600)
-    temporary.replace(path)
-
-
-class MeetingReview:
-    def __init__(self, config_path):
-        config = json.loads(config_path.read_text(encoding='utf-8'))
-        self.project = Path(config['project_path']).expanduser().resolve(strict=True)
-        if not self.project.is_dir():
-            raise ValueError('project_path must be an existing directory')
-        notes = Path(config.get('notes_directory', 'meetings'))
-        if notes.is_absolute() or '..' in notes.parts:
-            raise ValueError('notes_directory must be a relative path inside project_path')
-        if not (self.project / notes).resolve().is_relative_to(self.project):
-            raise ValueError('notes_directory must not link outside project_path')
-        self.notes_directory = str(notes)
-        self.timezone = config.get('timezone', 'UTC')
-        self.language = config.get('language', 'English')
-        self.binary = os.path.expanduser(config.get('t3_binary', '~/.t3/bin/t3'))
-        self.t3_home = config.get('t3_home')
-        default_state = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state')
-        self.state = Path(config.get('state_directory', str(default_state / 'meeting-recorder/t3-review'))).expanduser().resolve()
-        self.template = Path(__file__).with_name('meeting-prompt.md')
-
-    def t3(self, *args, prompt=None):
-        command = [self.binary, 'thread', *args, '--json']
-        if self.t3_home:
-            command += ['--base-dir', os.path.expanduser(self.t3_home)]
-        result = subprocess.run(command, input=prompt, text=True, encoding='utf-8',
-                                capture_output=True, cwd=self.project, timeout=90, check=True)
-        return json.loads(result.stdout)
-
-    def key(self, source):
-        # The same filename in another directory/project must get a separate review.
-        identity = str(self.project) + '\0' + str(source)
-        return hashlib.sha256(identity.encode()).hexdigest()[:24]
-
-    def remember(self, path, state, response):
-        thread_id = response.get('threadId')
-        if not isinstance(thread_id, str) or not thread_id:
-            raise ValueError('T3 returned no threadId; check T3 before retrying')
-        state.update(status='started', threadId=thread_id, link=response.get('link'))
-        save_state(path, state)
-        return state
-
-    def describe(self, path, state, digest):
-        if not state.get('link'):
-            try:
-                details = self.t3('show', state['threadId'], '--messages', '0')
-                state['link'] = details['thread'].get('link')
-                save_state(path, state)
-            except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as error:
-                # Persisting the ID first prevents a failed link lookup creating another chat.
-                print('Chat started, but its link could not be read:', error)
-        target = state.get('link') or state['threadId']
-        if state.get('sha256') != digest:
-            return 'Transcript changed. Continue in the existing chat (no new message sent): ' + target
-        return 'Meeting review ready; answer questions and approve Git publication in T3: ' + target
-
-    def launch(self, source, dry_run=False):
-        source = source.expanduser().resolve(strict=True)
-        if not source.is_file():
-            raise ValueError('Transcript must be a file')
-        raw = source.read_bytes()
-        if not raw.strip():
-            return 'Skipped: empty transcript'
-        digest = hashlib.sha256(raw).hexdigest()
-        key = self.key(source)
-        title = f'Meeting review: {source.stem} [{key[:8]}]'
-        context = {
-            'project_path': str(self.project),
-            'notes_directory': self.notes_directory,
-            'transcript_path': str(source),
-            'transcript_sha256': digest,
-            'audio_path': os.environ.get('MEETING_RECORDER_AUDIO_FILE'),
-            'timezone': self.timezone,
-            'language': self.language,
-        }
-        prompt = self.template.read_text(encoding='utf-8').replace(
-            '{{CONTEXT}}', json.dumps(context, ensure_ascii=False, indent=2))
-        if dry_run:
-            preview = self.state / (key + '.prompt.md')
-            preview.write_text(prompt, encoding='utf-8')
-            return 'Dry run: no T3 or Git calls. Prompt saved to ' + str(preview)
-        path = self.state / (key + '.json')
-        state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
-        if state and state.get('status') == 'started':
-            return self.describe(path, state, digest)
-        # Read-only project/reachability check; recover a lost start reply by its exact title.
-        threads = self.t3('list', '--project', str(self.project))
-        if not isinstance(threads, list):
-            raise ValueError('Unexpected T3 thread list; no chat started')
-        matches = [thread for thread in threads if thread.get('title') == title]
-        if len(matches) > 1:
-            raise ValueError('Multiple matching chats found; inspect T3 before retrying')
-        if matches:
-            state = state or {'source': str(source), 'sha256': digest, 'title': title}
-            return self.describe(path, self.remember(path, state, matches[0]), digest)
-        if state:
-            raise RuntimeError('Previous start has an unknown outcome. Inspect T3 and ' + str(path)
-                               + ' before manually resetting this record; not starting a duplicate.')
-        state = {'source': str(source), 'sha256': digest, 'title': title, 'status': 'starting',
-                 'created_at': datetime.datetime.now().astimezone().isoformat()}
-        save_state(path, state)
-        try:
-            # Do not use --wait: a review may pause for user input indefinitely.
-            response = self.t3('start', '--title', title, str(self.project), '-', prompt=prompt)
-            self.remember(path, state, response)
-        except Exception as error:
-            state.update(status='uncertain', error=str(error))
-            save_state(path, state)
-            raise
-        return self.describe(path, state, digest)
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('transcript', nargs='?', default=os.environ.get('MEETING_RECORDER_TRANSCRIPT_FILE'))
-    parser.add_argument('--config', type=Path, default=Path(__file__).with_name('config.json'))
-    parser.add_argument('--dry-run', action='store_true', help='Save the prompt without contacting T3 or Git')
-    args = parser.parse_args()
-    if not args.transcript:
-        parser.error('Pass a transcript path or set MEETING_RECORDER_TRANSCRIPT_FILE')
-    os.umask(0o077)
-    try:
-        review = MeetingReview(args.config.expanduser())
-        source = Path(args.transcript).expanduser().resolve(strict=True)
-        review.state.mkdir(parents=True, exist_ok=True, mode=0o700)
-    except Exception as error:
-        print('Configuration/source error:', error, file=sys.stderr)
-        return 1
-    log_path = review.state / (review.key(source) + '.log')
-    with log_path.open('a', encoding='utf-8', buffering=1) as log, contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
-        print('\nSTART', datetime.datetime.now().astimezone().isoformat())
-        try:
-            with (review.state / 'launch.lock').open('a') as lock:
-                fcntl.flock(lock, fcntl.LOCK_EX)
-                print(review.launch(source, args.dry_run))
-        except Exception as error:
-            print('ERROR:', error)
-            if isinstance(error, subprocess.CalledProcessError):
-                print(error.stderr or error.stdout or '')
-            return 1
-    return 0
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())
+config = json.loads(args.config.expanduser().read_text(encoding='utf-8'))
+project = Path(config['project_path']).expanduser().resolve(strict=True)
+transcript = Path(args.transcript).expanduser().resolve(strict=True)
+if not transcript.is_file():
+    parser.error('Transcript must be a file')
+context = {
+    'project_path': str(project),
+    'notes_directory': config.get('notes_directory', 'meetings'),
+    'transcript_path': str(transcript),
+    'audio_path': os.environ.get('MEETING_RECORDER_AUDIO_FILE'),
+    'timezone': config.get('timezone', 'UTC'),
+    'language': config.get('language', 'English'),
+}
+prompt = Path(__file__).with_name('meeting-prompt.md').read_text(encoding='utf-8')
+prompt = prompt.replace('{{CONTEXT}}', json.dumps(context, ensure_ascii=False, indent=2))
+if args.dry_run:
+    print(prompt)
+else:
+    subprocess.run(
+        [os.path.expanduser(config.get('t3_binary', '~/.t3/bin/t3')),
+         'thread', 'start', '--title', f'Meeting review: {transcript.stem}', str(project), '-'],
+        input=prompt, text=True, encoding='utf-8', cwd=project, check=True,
+    )
