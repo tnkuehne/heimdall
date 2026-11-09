@@ -24,8 +24,6 @@ context = {
     'notes_directory': config.get('notes_directory', 'meetings'),
     'transcript_path': str(transcript),
     'audio_path': os.environ.get('MEETING_RECORDER_AUDIO_FILE'),
-    'timezone': config.get('timezone', 'UTC'),
-    'language': config.get('language', 'English'),
 }
 prompt = Path(__file__).with_name('meeting-prompt.md').read_text(encoding='utf-8')
 prompt = prompt.replace('{{CONTEXT}}', json.dumps(context, ensure_ascii=False, indent=2))

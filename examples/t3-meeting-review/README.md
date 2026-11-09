@@ -25,9 +25,9 @@ cp -n examples/t3-meeting-review/config.example.json \
 ```
 
 Edit the installed `config.json`: set `project_path` to your existing T3 notes
-project, `notes_directory` to a relative destination inside it, and choose the
-note language and recording timezone. Set `t3_binary` to your CLI path; `~` is
-expanded in the project and CLI paths. Adapt the prompt to your notes conventions.
+project, `notes_directory` to a relative destination inside it, and `t3_binary`
+to your CLI path. `~` is expanded in the project and CLI paths. Adapt the prompt
+to your notes conventions.
 
 Preview the prompt using an existing transcript, without starting a chat:
 
