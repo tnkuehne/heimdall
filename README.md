@@ -231,6 +231,15 @@ MEETING_RECORDER_DURATION_SECONDS=123.456
 MEETING_RECORDER_CHANNELS=2
 ```
 
+### Example: interactive meeting review in T3 Code
+
+The [T3 meeting-review hook](examples/t3-meeting-review/README.md) starts a chat in
+your notes project after transcription. The agent asks about missing details,
+prepares a note with the original transcript, and asks for your approval before
+committing and pushing it. The example includes a configurable prompt, duplicate
+launch protection, local logs, and tests. The hook itself does not edit notes or
+run Git commands.
+
 ## Development
 
 The GNOME Shell source of truth is TypeScript:
